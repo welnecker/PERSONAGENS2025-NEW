@@ -174,23 +174,51 @@ _MONGO_OK = False
 _mongo_client = None
 _mongo_db = None
 
+def _close_mongo():
+    global _mongo_client
+    if _mongo_client:
+        try:
+            _mongo_client.close()
+        except Exception:
+            pass
+        _mongo_client = None
+
+import atexit
+atexit.register(_close_mongo)
+
 def _ensure_mongo():
     global _MONGO_OK, _mongo_client, _mongo_db
+    # Double-check locking pattern could be better, but we are under GIL for global var assign effectively.
+    # To be safer with threads, we use the existing _LOCK or a new one.
     if _mongo_db is not None:
         return
+
     uri = settings.mongo_uri()
     if not uri:
         _MONGO_OK = False
         return
-    try:
-        from pymongo import MongoClient
-        _mongo_client = MongoClient(uri)
-        _mongo_db = _mongo_client.get_database(settings.APP_NAME)
-        _MONGO_OK = True
-    except Exception:
-        _MONGO_OK = False
-        _mongo_client = None
-        _mongo_db = None
+
+    with _LOCK:
+        if _mongo_db is not None:
+            return
+        
+        try:
+            from pymongo import MongoClient
+            # Melhora robustez e eficiência de conexões
+            _mongo_client = MongoClient(
+                uri,
+                maxPoolSize=50,
+                minPoolSize=5,
+                serverSelectionTimeoutMS=5000, # Fail fast se DB cair
+                connectTimeoutMS=5000,
+                socketTimeoutMS=5000,
+            )
+            _mongo_db = _mongo_client.get_database(settings.APP_NAME)
+            _MONGO_OK = True
+        except Exception:
+            _MONGO_OK = False
+            _mongo_client = None
+            _mongo_db = None
 
 class MongoCollection:
     def __init__(self, name: str):

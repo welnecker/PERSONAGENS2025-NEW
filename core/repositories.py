@@ -220,10 +220,32 @@ def last_event(usuario: str, tipo: str) -> Optional[Dict[str, Any]]:
     )
 
 
-def delete_all_user_data(usuario: str) -> Dict[str, int]:
     return {
         "hist": _hist().delete_many({"usuario": usuario}),
         "state": _state().delete_many({"usuario": usuario}),
         "eventos": _events().delete_many({"usuario": usuario}),
         "perfil": 0,
     }
+
+
+def ensure_indexes() -> None:
+    """
+    Garante que os índices essenciais existam (Melhora performance e evita full-scan).
+    """
+    try:
+        from .database import get_backend
+        if get_backend() != "mongo":
+            return
+
+        # History: busca por usuario, ordenado por data
+        _hist()._col.create_index([("usuario", 1), ("ts", 1), ("_id", 1)])
+        
+        # State: busca por usuario (chave única conceitual)
+        _state()._col.create_index([("usuario", 1)])
+        
+        # Events: busca por usuario, mais recentes
+        _events()._col.create_index([("usuario", 1), ("ts", -1)])
+        
+    except Exception:
+        # Silencia erros de indexação para não quebrar o app
+        pass

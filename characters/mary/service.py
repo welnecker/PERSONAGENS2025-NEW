@@ -6,7 +6,6 @@ import random
 from typing import List, Dict, Tuple, Any
 import streamlit as st
 import logging
-from core.nsfw import nsfw_enabled
 from core.memoria_longa import topk as lore_topk, save_fragment as lore_save
 from core.ultra import critic_review, polish
 from core.common.base_service import BaseCharacter
@@ -20,6 +19,44 @@ import json
 from characters.registry import _SERVICE_CACHE
 
 logger = logging.getLogger(__name__)
+
+# === NSFW LOCAL PARA MARY (sem depender de core/nsfw.py) ===
+def nsfw_enabled(usuario_key: str, local_atual: str | None = None) -> bool:
+    """
+    Controle LOCAL de NSFW da Mary.
+
+    Prioridade:
+    1) st.session_state["mary_nsfw_on"] (checkbox no app)
+    2) Fact "mary.nsfw" (se existir no backend)
+    3) Fallback: True (NSFW liberado)
+
+    Isso mantém a assinatura compatível com o antigo nsfw_enabled(usuario_key, local).
+    """
+    # 1) Session: controle imediato da UI
+    try:
+        if "mary_nsfw_on" in st.session_state:
+            return bool(st.session_state["mary_nsfw_on"])
+    except Exception:
+        pass
+
+    # 2) Backend: se em algum momento você salvar um fact "mary.nsfw"
+    try:
+        f = cached_get_facts(usuario_key) or {}
+        v = f.get("mary.nsfw", None)
+        if isinstance(v, bool):
+            return v
+        if isinstance(v, str):
+            s = v.strip().lower()
+            if s in ("1", "true", "sim", "on", "yes", "y"):
+                return True
+            if s in ("0", "false", "nao", "não", "off", "no", "n"):
+                return False
+    except Exception:
+        pass
+
+    # 3) Padrão: liberado
+    return True
+
 
 
 def _log_error(context: str, exc: Exception) -> None:
@@ -112,6 +149,34 @@ TOOLS = [
                     },
                 },
                 "required": ["content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "register_entity",
+            "description": (
+                "Registra uma pessoa importante na vida da Mary (parceiro, amante, médica, "
+                "amiga, rival etc.) como entidade canônica na memória."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Nome ou forma como Mary chama essa pessoa.",
+                    },
+                    "role": {
+                        "type": "string",
+                        "description": "Papel na vida da Mary (parceiro, amante, médica, amiga, rival etc.).",
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "1–3 frases explicando quem é essa pessoa e por que importa.",
+                    },
+                },
+                "required": ["name"],
             },
         },
     },
@@ -861,6 +926,28 @@ class MaryService(BaseCharacter):
 
         usuario_key = _current_user_key()
         plow = prompt.strip().lower()
+
+        # ============================================================
+        # 1) FALA INICIAL — SE NÃO HÁ HISTÓRICO AINDA
+        # ============================================================
+        # A mesma lógica do projeto original:
+        # Se não existe diálogo anterior no backend (Mongo),
+        # Mary deve iniciar com a fala inicial do persona.py (history_boot).
+
+        # Verifica histórico persistido
+        try:
+            tem_historico = bool(get_history_docs(usuario_key, limit=1))
+        except Exception:
+            tem_historico = False
+
+        # Se não há histórico NEM resumo rolante, dispara fala inicial
+        if not tem_historico:
+            persona_text, history_boot = self._load_persona()
+            if history_boot and history_boot[0].get("content"):
+                # IMPORTANTÍSSIMO: registrar essa fala como interação do lado da Mary
+                save_interaction(usuario_key, "assistant", history_boot[0]["content"])
+                return history_boot[0]["content"]
+
 
         # ===== Comando manual para mudar o local da cena =====
         if plow.startswith("/local "):

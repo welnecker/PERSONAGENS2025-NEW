@@ -1,0 +1,7 @@
+__pycache__/
+.vscode/
+.streamlit/
+*.log
+*.pyc
+.env
+secrets.toml
