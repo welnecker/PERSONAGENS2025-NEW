@@ -919,7 +919,7 @@ class MaryService(BaseCharacter):
 
 
 
-    def reply(self, user: str, model: str) -> str:
+       def reply(self, user: str, model: str) -> str:
         prompt = self._get_user_prompt()
         if not prompt:
             return ""
@@ -927,26 +927,8 @@ class MaryService(BaseCharacter):
         usuario_key = _current_user_key()
         plow = prompt.strip().lower()
 
-        # ============================================================
-        # 1) FALA INICIAL — SE NÃO HÁ HISTÓRICO AINDA
-        # ============================================================
-        # A mesma lógica do projeto original:
-        # Se não existe diálogo anterior no backend (Mongo),
-        # Mary deve iniciar com a fala inicial do persona.py (history_boot).
-
-        # Verifica histórico persistido
-        try:
-            tem_historico = bool(get_history_docs(usuario_key, limit=1))
-        except Exception:
-            tem_historico = False
-
-        # Se não há histórico NEM resumo rolante, dispara fala inicial
-        if not tem_historico:
-            persona_text, history_boot = self._load_persona()
-            if history_boot and history_boot[0].get("content"):
-                # IMPORTANTÍSSIMO: registrar essa fala como interação do lado da Mary
-                save_interaction(usuario_key, "assistant", history_boot[0]["content"])
-                return history_boot[0]["content"]
+        # A PARTIR DAQUI já entra direto nos comandos:
+        # /local, /reset historico, /reset total, etc.
 
 
         # ===== Comando manual para mudar o local da cena =====
