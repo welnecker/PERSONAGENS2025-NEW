@@ -4,7 +4,7 @@ from __future__ import annotations
 MaryService (refatorado)
 - Mantém: memória canônica (facts), resumo rolante, eventos fixos mary.evento.*, lorebook, tool-calling opcional.
 - Ajusta: NSFW como toggle + bloco curto e estável (sem “cartilha” gigante no system).
-- Corrige: problemas de indentação/duplicação e reduz riscos de travamento (loops, warnings em excesso).
+- Corrige: riscos de travamento (loops, warnings em excesso), e implementa /reset historico e /reset total.
 
 Importante: este arquivo NÃO inclui texto sexual gráfico. Se você quiser um bloco mais explícito,
 cole localmente em FULL_NSFW_HOOK (string) sob sua responsabilidade e regras da sua plataforma.
@@ -57,8 +57,7 @@ Estilo: adulto liberado (direto), com intensidade emocional e progressão clara 
 - Evite repetição mecânica de frases/manias.
 """.strip()
 
-# ⚠️ OPCIONAL: cole aqui o seu bloco "mais pesado" (se você usa em ambiente que permite).
-# Mantido curto por design: a riqueza deve vir do histórico + cena, não de uma cartilha gigante.
+# ⚠️ OPCIONAL: gancho curto adicional (sem “cartilha gigante”)
 FULL_NSFW_HOOK = """
 [NSFW_HOOK_EXTRA]
 - Linguagem adulta direta, com **NSFW LIBERADO**.
@@ -109,7 +108,7 @@ def _log_error(context: str, exc: Exception) -> None:
     except Exception:
         pass
 
-    # Feedback visual só se debug estiver ligado (evita “spam” que pode travar UI)
+    # Feedback visual só se debug estiver ligado (evita spam que pode travar UI)
     try:
         if st.session_state.get("mary_debug_errors"):
             st.error(msg)
@@ -243,8 +242,8 @@ def _llm_summarize(model_id: str, text: str) -> str:
             use_model = candidates[0]
 
     seed = (
-        "Resuma este histórico entre Mary e o usuário em 8–12 frases curtas. " 
-        "Foque em fatos duráveis: relação, local, acordos, conflitos, eventos marcantes. " 
+        "Resuma este histórico entre Mary e o usuário em 8–12 frases curtas. "
+        "Foque em fatos duráveis: relação, local, acordos, conflitos, eventos marcantes. "
         "Não repita diálogos literais e não invente fatos."
     )
 
@@ -295,17 +294,6 @@ def _collect_mary_events_from_facts(facts: Dict[str, Any]) -> Dict[str, str]:
             label = k.replace("mary.eventos.", "", 1)
             eventos[label] = str(v)
 
-    for mk in ("mary", "Mary"):
-        mary_obj = facts.get(mk, {})
-        if not isinstance(mary_obj, dict):
-            continue
-        evt_block = mary_obj.get("evento") or mary_obj.get("eventos") or {}
-        if not isinstance(evt_block, dict):
-            continue
-        for label, val in evt_block.items():
-            if val and str(label) not in eventos:
-                eventos[str(label)] = str(val)
-
     return eventos
 
 
@@ -337,6 +325,38 @@ def _get_thematic_memories_for_tags(usuario_key: str, tags: List[str]) -> str:
 
 
 # ==========================================================
+# LOREBOOK (curto, controlado)
+# ==========================================================
+def _get_lorebook(usuario_key: str, prompt: str, k: int = 4, max_chars: int = 900) -> str:
+    """
+    Puxa top-k fragmentos do lorebook (memória longa).
+    Mantém curto pra não estourar contexto e não travar.
+    """
+    try:
+        items = lore_topk(usuario_key, prompt, k=k) or []
+    except Exception:
+        items = []
+
+    lines: List[str] = []
+    for it in items:
+        txt = ""
+        if isinstance(it, dict):
+            txt = str(it.get("texto") or it.get("text") or it.get("content") or "")
+        else:
+            txt = str(it)
+        txt = re.sub(r"\s+", " ", txt).strip()
+        if txt:
+            lines.append(f"- {txt}")
+        if sum(len(x) for x in lines) > max_chars:
+            break
+
+    out = "\n".join(lines).strip()
+    if not out:
+        return ""
+    return out[:max_chars]
+
+
+# ==========================================================
 # SYSTEM BLOCK (curto e estável)
 # ==========================================================
 def _build_system_block(
@@ -350,10 +370,12 @@ def _build_system_block(
     nsfw_block: str,
     events_block: str,
     thematic_block: str,
+    lore_block: str,
     scene_time: str = "",
 ) -> str:
     thematic = f"\n\nMEMÓRIA_TEMÁTICA:\n{thematic_block}" if thematic_block else ""
     events = f"\n\nEVENTOS_FIXOS_MARY:\n{events_block}" if events_block else ""
+    lore = f"\n\nLOREBOOK_RELEVANTE:\n{lore_block}" if lore_block else ""
 
     return f"""
 Você é **Mary Massariol – Esposa Cúmplice**, personagem fixa em um roleplay contínuo com o usuário.
@@ -386,6 +408,7 @@ FOCO_SENSORIAL_DESTE_TURNO:
 - Priorize: {sensory_focus}
 {thematic}
 {events}
+{lore}
 
 {nsfw_block}
 
@@ -405,7 +428,7 @@ def _mem_drop_warn(report: Dict[str, Any]) -> None:
     hist_budget = report.get("hist_budget", 0)
     if summarized or trimmed:
         st.caption(
-            f"🧠 Memória ajustada: {summarized} pares antigos resumidos, {trimmed} blocos verbatim podados. " 
+            f"🧠 Memória ajustada: {summarized} pares antigos resumidos, {trimmed} blocos verbatim podados. "
             f"(histórico: {hist_tokens}/{hist_budget} tokens)."
         )
 
@@ -496,14 +519,14 @@ TOOLS = [
         "function": {
             "name": "save_event",
             "description": (
-                "Registra um EVENTO CANÔNICO importante em mary.evento.<label>. " 
+                "Registra um EVENTO CANÔNICO importante em mary.evento.<label>. "
                 "Use apenas para fatos de longo prazo que devem influenciar cenas futuras."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "label": {"type": "string", "description": "Identificador curto e estável (opcional)."},
-                    "content": {"type": "string", "description": "Resumo objetivo do evento (3 a 6 frases)."},
+                    "label": {"type": "string"},
+                    "content": {"type": "string"},
                 },
                 "required": ["content"],
             },
@@ -589,6 +612,32 @@ class MaryService(BaseCharacter):
         usuario_key = _current_user_key()
         plow = prompt.lower().strip()
 
+        # =========================
+        # COMANDOS DO APP (RESET)
+        # =========================
+        if plow == "/reset historico":
+            # “soft reset”: apaga resumo rolante e marca reset (não deleta Mongo)
+            set_fact(usuario_key, "mary.rs.v2", "", {"fonte": "cmd"})
+            set_fact(usuario_key, "mary.rs.v2.ts", time.time(), {"fonte": "cmd"})
+            set_fact(usuario_key, "mary.reset.historico.ts", time.time(), {"fonte": "cmd"})
+            clear_user_cache(usuario_key)
+            return "✅ Reset de sessão aplicado: resumo rolante limpo. Vamos seguir daqui com leveza e continuidade."
+
+        if plow == "/reset total":
+            # “harder reset”: zera resumo + “apaga” eventos/entidades setando vazio
+            f_all = cached_get_facts(usuario_key) or {}
+            for k in list(f_all.keys()):
+                if isinstance(k, str) and (k.startswith("mary.evento.") or k.startswith("mary.eventos.") or k.startswith("mary.ent.")):
+                    try:
+                        set_fact(usuario_key, k, "", {"fonte": "cmd_reset_total"})
+                    except Exception:
+                        pass
+            set_fact(usuario_key, "mary.rs.v2", "", {"fonte": "cmd_reset_total"})
+            set_fact(usuario_key, "mary.rs.v2.ts", time.time(), {"fonte": "cmd_reset_total"})
+            set_fact(usuario_key, "mary.reset.total.ts", time.time(), {"fonte": "cmd_reset_total"})
+            clear_user_cache(usuario_key)
+            return "⚠️ RESET TOTAL aplicado: eventos/entidades e resumo rolante foram limpos (no nível de facts)."
+
         # comandos básicos
         if plow.startswith("/local "):
             novo_local = prompt[len("/local "):].strip()
@@ -603,19 +652,18 @@ class MaryService(BaseCharacter):
         prefs = _read_prefs(f_all)
         local_atual = get_fact(usuario_key, "local_cena_atual", "") or ""
 
+        # NSFW block (toggle + hook opcional)
         nsfw_on = nsfw_enabled(usuario_key)
         nsfw_block = NSFW_TOGGLE_STYLE if nsfw_on else SAFE_SENSUAL_STYLE
-        
         if nsfw_on and FULL_NSFW_HOOK.strip():
             nsfw_block += "\n\n" + FULL_NSFW_HOOK.strip()
-
 
         memoria_pin = self._build_memory_pin(usuario_key, user)
 
         tags = _detect_thematic_tags_from_prompt(prompt)
-        thematic_mem = _get_thematic_memories_for_tags(usuario_key, tags)
-        thematic_block = thematic_mem
+        thematic_block = _get_thematic_memories_for_tags(usuario_key, tags)
 
+        # foco sensorial rotativo (estável e leve)
         foco_pool = ["cabelo", "olhos", "lábios/boca", "mãos/toque", "respiração", "perfume", "pele/temperatura", "voz/timbre", "sorriso"]
         idx = int(st.session_state.get("mary_attr_idx", -1))
         idx = (idx + 1) % len(foco_pool)
@@ -627,11 +675,15 @@ class MaryService(BaseCharacter):
         docs = cached_get_history(usuario_key) or []
         evidence = self._compact_user_evidence(docs, max_chars=320)
 
+        # eventos fixos (capado)
         eventos_dict = _collect_mary_events_from_facts(f_all)
         events_block = ""
         if eventos_dict:
-            linhas = [f"- {label}: {str(val).strip()}" for label, val in sorted(eventos_dict.items())]
+            linhas = [f"- {label}: {str(val).strip()}" for label, val in sorted(eventos_dict.items()) if str(val).strip()]
             events_block = "\n".join(linhas)[:1200]
+
+        # lorebook (capado)
+        lore_block = _get_lorebook(usuario_key, prompt, k=4, max_chars=900)
 
         system_block = _build_system_block(
             persona_text=persona_text,
@@ -644,10 +696,17 @@ class MaryService(BaseCharacter):
             nsfw_block=nsfw_block,
             events_block=events_block,
             thematic_block=thematic_block,
+            lore_block=lore_block,
             scene_time=str(st.session_state.get("momento_atual", "") or ""),
         )
 
-        hist_msgs = self._montar_historico(usuario_key, history_boot, model, verbatim_ultimos=int(st.session_state.get("verbatim_ultimos", 30)))
+        hist_msgs = self._montar_historico(
+            usuario_key,
+            history_boot,
+            model,
+            verbatim_ultimos=int(st.session_state.get("verbatim_ultimos", 30)),
+        )
+
         messages: List[Dict[str, Any]] = [{"role": "system", "content": system_block}]
         messages.extend(hist_msgs)
         messages.append({"role": "system", "content": memoria_pin})
@@ -708,6 +767,7 @@ class MaryService(BaseCharacter):
                     args = json.loads(arg_str)
                 except Exception:
                     args = {}
+
                 res = self._exec_tool_call(func_name, args, usuario_key, last_assistant=texto)
                 messages.append({"role": "tool", "tool_call_id": tool_id, "content": res})
 
@@ -869,7 +929,7 @@ class MaryService(BaseCharacter):
         resumo_anterior = str(f.get("mary.rs.v2", "") or "")
 
         seed = (
-            "Atualize o resumo contínuo com fatos duráveis. " 
+            "Atualize o resumo contínuo com fatos duráveis. "
             "Não repita diálogos e não invente fatos. Saída: 8–14 frases curtas."
         )
         corpo = f"RESUMO_ANTERIOR:\n{resumo_anterior or '(sem resumo)'}\n\nULTIMA_INTERACAO:\nUSER: {last_user}\nMARY: {last_assistant}"
