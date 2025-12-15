@@ -1,24 +1,32 @@
 from __future__ import annotations
+
 import streamlit as st
 
 from characters.mary.service import MaryService, _current_user_key
 from characters.mary.persona import get_persona
 from core.service_router import list_models
-from core.repositories import save_interaction, get_history_docs
+from core.repositories import save_interaction, get_history_docs, get_facts, set_fact
 
-# ==== BLOQUEIO POR SENHA PARA O MARY_APP ====
+# ✅ TEM QUE SER A PRIMEIRA CHAMADA streamlit (antes de st.title / st.sidebar / etc.)
+st.set_page_config(
+    page_title="Mary – Esposa Cúmplice",
+    page_icon="💍",
+    layout="centered",
+)
 
-SENHA_CORRETA = "141267"   # ← coloque aqui a senha que quiser
+# ==========================================================
+# BLOQUEIO POR SENHA PARA O MARY_APP
+# ==========================================================
+SENHA_CORRETA = "141267"  # ← coloque aqui a senha que quiser
 
-def check_password():
+
+def check_password() -> bool:
     """Exibe um campo de senha e barra acesso se estiver incorreto."""
     if "senha_ok" not in st.session_state:
         st.session_state["senha_ok"] = False
 
-    # Se ainda não validou a senha, mostra a caixa
     if not st.session_state["senha_ok"]:
         st.title("🔐 Mary – Acesso Restrito")
-
         senha = st.text_input("Digite a senha de acesso:", type="password")
 
         if st.button("Entrar"):
@@ -29,7 +37,6 @@ def check_password():
             else:
                 st.error("Senha incorreta. Tente novamente.")
 
-        # Impede que o app abaixo carregue
         return False
 
     return True
@@ -40,8 +47,9 @@ if not check_password():
     st.stop()
 
 
-
-# ========= HELPERS DE ESTADO =========
+# ==========================================================
+# HELPERS DE ESTADO
+# ==========================================================
 def _garantir_estado_inicial() -> None:
     # Usuário padrão
     if "user_id" not in st.session_state or not st.session_state["user_id"]:
@@ -57,9 +65,7 @@ def _garantir_estado_inicial() -> None:
             modelos = list_models() or []
         except Exception:
             modelos = []
-        st.session_state["model"] = (
-            modelos[0] if modelos else "deepseek/deepseek-chat-v3-0324"
-        )
+        st.session_state["model"] = modelos[0] if modelos else "deepseek/deepseek-chat-v3-0324"
 
     # Flag NSFW da Mary (default: ligado)
     if "mary_nsfw_on" not in st.session_state:
@@ -77,44 +83,33 @@ def _gerar_fala_inicial() -> str:
     SEM depender de reply() e SEM prompt secreto.
     """
     try:
-        persona_text, history_boot = get_persona()
+        _, history_boot = get_persona()
     except Exception:
-        persona_text, history_boot = "", []
+        history_boot = []
 
     intro = ""
-
-    # Tenta achar a primeira fala da Mary no history_boot
     if isinstance(history_boot, list):
         for msg in history_boot:
             if isinstance(msg, dict) and msg.get("content"):
                 intro = str(msg["content"]).strip()
                 break
 
-    # Fallback simples se não tiver nada no boot
     if not intro:
         intro = (
             "Eu ajeito o cabelo, dou um sorriso de canto e fico te observando por um instante.\n\n"
             "\"Então… vamos continuar de onde a gente parou, amor?\""
         )
 
-    # Tenta registrar essa fala como interação inicial no backend
     try:
         usuario_key = _current_user_key()
-        save_interaction(
-            usuario_key,
-            "[FALA_INICIAL_MARY]",
-            intro,
-            "mary-persona-static",
-        )
+        save_interaction(usuario_key, "[FALA_INICIAL_MARY]", intro, "mary-persona-static")
     except Exception:
-        # Se der erro de backend, não derruba a tela
         pass
 
     return intro
 
 
 def _colar_fala_inicial_na_tela() -> None:
-    """Adiciona a fala inicial no chat_history e marca intro_done."""
     intro = _gerar_fala_inicial()
     st.session_state["chat_history"] = [("assistant", intro)]
     st.session_state["mary_intro_done"] = True
@@ -131,13 +126,13 @@ def _apagar_ultimo_turno_visual() -> None:
     if not hist:
         return
 
-    # Ex.: [..., ("user", ...), ("assistant", ...)]
     if len(hist) >= 2 and hist[-1][0] == "assistant" and hist[-2][0] == "user":
         hist = hist[:-2]
     else:
         hist = hist[:-1]
 
     st.session_state["chat_history"] = hist
+
 
 def _carregar_chat_visual_do_backend() -> list[tuple[str, str]]:
     """
@@ -161,8 +156,29 @@ def _carregar_chat_visual_do_backend() -> list[tuple[str, str]]:
     return hist
 
 
+def _list_eventos_mary(facts: dict) -> list[tuple[str, str]]:
+    """Lista eventos fixos mary.evento.* e mary.eventos.* (para exibir na sidebar)."""
+    eventos: list[tuple[str, str]] = []
+    if not isinstance(facts, dict):
+        return eventos
 
-# ========= APP PRINCIPAL =========
+    for k, v in facts.items():
+        if not isinstance(k, str) or not v:
+            continue
+        if k.startswith("mary.evento."):
+            label = k.replace("mary.evento.", "", 1)
+            eventos.append((label, str(v)))
+        elif k.startswith("mary.eventos."):
+            label = k.replace("mary.eventos.", "", 1)
+            eventos.append((label, str(v)))
+
+    eventos.sort(key=lambda x: x[0])
+    return eventos
+
+
+# ==========================================================
+# APP PRINCIPAL
+# ==========================================================
 def main() -> None:
     st.title("Mary – Esposa Cúmplice 💍")
 
@@ -188,52 +204,43 @@ def main() -> None:
         st.selectbox(
             "🧠 Modelo",
             all_models,
-            index=all_models.index(st.session_state["model"])
-            if st.session_state["model"] in all_models
-            else 0,
+            index=all_models.index(st.session_state["model"]) if st.session_state["model"] in all_models else 0,
             key="model",
         )
 
         st.markdown("---")
 
-        # NSFW ON/OFF – manda direto pro session_state
-        nsfw_on = st.checkbox(
+        # NSFW ON/OFF (só UMA fonte de verdade: session_state["mary_nsfw_on"])
+        st.checkbox(
             "Modo adulto liberado (NSFW)",
-            value=st.session_state.get("mary_nsfw_on", True),
+            key="mary_nsfw_on",
             help=(
                 "Quando ligado, Mary usa o estilo adulto completo. "
                 "Quando desligado, ela fica só no tom sugestivo/romântico."
             ),
         )
-        st.session_state["mary_nsfw_on"] = nsfw_on
 
         st.markdown("---")
         st.subheader("🎭 Persona / Turnos")
 
-        # 1) RECARREGAR PERSONA (limpar tela + fala inicial)
         if st.button("Recarregar persona (limpar tela)"):
             _colar_fala_inicial_na_tela()
             st.success("Persona recarregada. Fala inicial exibida.")
             st.rerun()
 
-
-        # 2) APAGAR ÚLTIMO TURNO (apenas visual)
         if st.button("Apagar último turno"):
             _apagar_ultimo_turno_visual()
             st.info("Último turno removido da tela (somente visual).")
             st.rerun()
 
-
         st.markdown("---")
         st.subheader("🧹 Limpeza / Reset")
 
-        # 3) LIMPAR TELA (somente visual)
         if st.button("Limpar tela (chat visual)"):
             st.session_state["chat_history"] = []
             st.info("Tela limpa. Histórico no backend preservado.")
             st.rerun()
 
-        # 4) RESET HISTÓRICO (sessão) – usando comando interno da Mary
         if st.button("Reset histórico da Mary (sessão)"):
             st.session_state["chat_input"] = "/reset historico"
             resp = svc.reply(
@@ -244,7 +251,6 @@ def main() -> None:
             st.success("Histórico de diálogo e resumo rolante resetados para esta sessão.")
             st.rerun()
 
-        # 5) RESET TOTAL (memórias fixas) – também via comando interno
         if st.button("RESET TOTAL da Mary (memórias fixas)"):
             st.session_state["chat_input"] = "/reset total"
             resp = svc.reply(
@@ -256,26 +262,55 @@ def main() -> None:
             st.rerun()
 
         st.markdown("---")
+        st.subheader("🧠 Memória / Diagnóstico")
 
-        # Sidebar detalhado da Mary (debug, memórias, etc.)
+        # Mostra último erro de modelo, se existir
+        err = st.session_state.get("mary_last_model_error", "")
+        if err:
+            st.caption(f"⚠️ Último erro de modelo: {err}")
+
+        # Exibe eventos fixos (somente leitura)
         try:
-            svc_for_sidebar = MaryService()
-            svc_for_sidebar.render_sidebar(st.container())
+            usuario_key = _current_user_key()
+            facts = get_facts(usuario_key) or {}
         except Exception:
-            st.caption("Sidebar avançado da Mary carregado no modo básico.")
+            facts = {}
 
-        # ========= FALA INICIAL / RECUPERAÇÃO DO HISTÓRICO =========
+        with st.expander("📌 Eventos fixos (mary.evento.*) — leitura", expanded=False):
+            eventos = _list_eventos_mary(facts)
+            if not eventos:
+                st.caption("Nenhum evento fixo registrado ainda.")
+            else:
+                for label, val in eventos:
+                    st.markdown(f"**{label}**")
+                    vv = str(val)
+                    st.caption(vv[:400] + ("..." if len(vv) > 400 else ""))
+
+        # Atalho opcional para setar local da cena (salva como fact)
+        with st.expander("📍 Cena atual — local", expanded=False):
+            local_atual = ""
+            try:
+                local_atual = str((facts or {}).get("local_cena_atual", "") or "")
+            except Exception:
+                pass
+            novo_local = st.text_input("Local da cena (canônico)", value=local_atual)
+            if st.button("Salvar local"):
+                try:
+                    set_fact(usuario_key, "local_cena_atual", novo_local.strip(), {"fonte": "sidebar"})
+                    st.success("Local salvo.")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Falha ao salvar local: {e}")
+
+    # ========= FALA INICIAL / RECUPERAÇÃO DO HISTÓRICO =========
     if not st.session_state["chat_history"]:
-        # 1) Tenta reconstruir a conversa a partir do Mongo
         backend_hist = _carregar_chat_visual_do_backend()
         if backend_hist:
             st.session_state["chat_history"] = backend_hist
             st.session_state["mary_intro_done"] = True
         else:
-            # 2) Se não houver nada salvo, aí sim gera a fala inicial da persona
             if not st.session_state.get("mary_intro_done", False):
                 _colar_fala_inicial_na_tela()
-
 
     # ========= RENDER DO HISTÓRICO =========
     for role, content in st.session_state["chat_history"]:
@@ -285,12 +320,10 @@ def main() -> None:
     # ========= INPUT DO USUÁRIO =========
     prompt = st.chat_input("Fala algo pra Mary...")
     if prompt:
-        # mostra no chat
         st.session_state["chat_history"].append(("user", prompt))
         with st.chat_message("user"):
             st.markdown(prompt)
 
-        # envia para MaryService
         st.session_state["chat_input"] = prompt
         resposta = svc.reply(
             user=st.session_state.get("user_id", "Janio"),
