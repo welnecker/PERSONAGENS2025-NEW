@@ -5,9 +5,9 @@ MaryService (refatorado)
 - Mantém: memória canônica (facts), resumo rolante, eventos fixos mary.evento.*, lorebook, tool-calling opcional.
 - Ajusta: NSFW como toggle + bloco curto e estável (sem “cartilha” gigante no system).
 - Corrige: riscos de travamento (loops, warnings em excesso), e implementa /reset historico e /reset total.
+- NOVO: trava anti-“finalizar o ato” + gancho obrigatório de continuidade quando usuário não pede conclusão.
 
-Importante: este arquivo NÃO inclui texto sexual gráfico. Se você quiser um bloco mais explícito,
-cole localmente em FULL_NSFW_HOOK (string) sob sua responsabilidade e regras da sua plataforma.
+Importante: este arquivo NÃO inclui texto sexual gráfico.
 """
 
 import json
@@ -48,23 +48,25 @@ SAFE_SENSUAL_STYLE = """
 Estilo: romance adulto, tensão, intimidade e sugestão.
 - Evite detalhes gráficos; foque em clima, emoção, desejo, presença e condução da cena.
 - Mantenha continuidade e cumplicidade, sem cair em censura robótica.
+- NÃO finalize a cena de forma “conclusiva”; deixe gancho para o próximo turno.
 """.strip()
 
 NSFW_TOGGLE_STYLE = """
 [NSFW_ON]
 Estilo: adulto liberado (direto), com intensidade emocional e progressão clara de cena.
-- Sem loops infinitos (cada cena avança; se chegar a um ápice, finalize e transicione para pós-cena).
+- A cena PROGRIDE a cada turno, mas NÃO precisa (e não deve) concluir automaticamente.
+- Só conclua (clímax/pós-cena) se o usuário conduzir explicitamente para conclusão.
+- Se a tensão subir, mantenha o estado "durante" e PARE no ápice com gancho claro.
 - Evite repetição mecânica de frases/manias.
 """.strip()
 
-# ⚠️ OPCIONAL: gancho curto adicional (sem “cartilha gigante”)
+# ⚠️ Opcional (curto)
 FULL_NSFW_HOOK = """
 [NSFW_HOOK_EXTRA]
 - Linguagem adulta direta, com **NSFW LIBERADO**.
-- A cena deve PROGREDIR a cada turno, mas NÃO é obrigada a concluir.
-- Clímax só deve ocorrer se for claramente conduzido pelo ritmo da conversa.
-- Se o momento estiver intenso, mantenha o estado "durante", sem encerrar abruptamente.
-- Finalize e transicione para pós-cena APENAS se houver indicação clara de conclusão.
+- A cena deve PROGREDIR, mas manter espaço para continuar no próximo turno.
+- Clímax só ocorre se o usuário pedir/confirmar; caso contrário, "pausa no ápice" + gancho.
+- Termine sua resposta deixando 1 gancho (ação em andamento / convite / pergunta curta).
 """.strip()
 
 
@@ -109,7 +111,6 @@ def _log_error(context: str, exc: Exception) -> None:
     except Exception:
         pass
 
-    # Feedback visual só se debug estiver ligado (evita spam que pode travar UI)
     try:
         if st.session_state.get("mary_debug_errors"):
             st.error(msg)
@@ -329,10 +330,6 @@ def _get_thematic_memories_for_tags(usuario_key: str, tags: List[str]) -> str:
 # LOREBOOK (curto, controlado)
 # ==========================================================
 def _get_lorebook(usuario_key: str, prompt: str, k: int = 4, max_chars: int = 900) -> str:
-    """
-    Puxa top-k fragmentos do lorebook (memória longa).
-    Mantém curto pra não estourar contexto e não travar.
-    """
     try:
         items = lore_topk(usuario_key, prompt, k=k) or []
     except Exception:
@@ -355,6 +352,51 @@ def _get_lorebook(usuario_key: str, prompt: str, k: int = 4, max_chars: int = 90
     if not out:
         return ""
     return out[:max_chars]
+
+
+# ==========================================================
+# CONTINUIDADE (anti “finalizar em 1 turno”)
+# ==========================================================
+def _user_requested_conclusion(prompt: str) -> bool:
+    p = (prompt or "").lower()
+    # palavras que normalmente indicam “finaliza/agora conclui”
+    keys = [
+        "termina", "finaliza", "conclui", "acaba", "acabar",
+        "goza", "gozar", "chega lá", "chegar lá",
+        "pode terminar", "pode finalizar", "agora sim termina",
+    ]
+    return any(k in p for k in keys)
+
+
+def _ensure_continuation_hook(texto: str, prompt: str) -> str:
+    """
+    Se o usuário NÃO pediu conclusão, força o final do texto a ficar “aberto”,
+    com gancho claro de continuidade (sem encerrar a cena).
+    """
+    t = (texto or "").strip()
+    if not t:
+        return t
+
+    if _user_requested_conclusion(prompt):
+        return t  # usuário pediu, deixa concluir
+
+    # Se já termina com pergunta/gancho, não mexe.
+    if re.search(r"[\?\!]\s*$", t):
+        return t
+
+    # Heurística: se o texto termina muito “fechado”, adiciona gancho.
+    # (sem policiar demais o conteúdo; apenas reabre cena)
+    hook = (
+        "\n\nEu fico bem perto de você, respirando devagar, "
+        "sem quebrar o clima — como se a gente estivesse no meio do caminho. "
+        "Me diz… você quer que eu continue assim, mais devagar, ou você toma a liderança agora?"
+    )
+
+    # Evita duplicar se já existir frase parecida
+    if "me diz" in t.lower() and "continue" in t.lower():
+        return t
+
+    return t + hook
 
 
 # ==========================================================
@@ -411,9 +453,10 @@ FOCO_SENSORIAL_DESTE_TURNO:
 {events}
 {lore}
 
-CONTINUIDADE_DE_CENA:
-- Não conclua atos íntimos a menos que o usuário conduza explicitamente para isso.
-- Priorize progressão gradual, variação de ritmo e possibilidade de continuidade.
+CONTINUIDADE_DE_CENA (OBRIGATÓRIO):
+- NÃO conclua atos íntimos automaticamente.
+- Se o usuário não pedir “terminar/finalizar”, sua resposta deve PARAR com a cena EM ANDAMENTO.
+- Termine SEMPRE deixando um GANCHO claro para o próximo turno (pergunta curta OU ação em suspensão).
 
 {nsfw_block}
 
@@ -621,7 +664,6 @@ class MaryService(BaseCharacter):
         # COMANDOS DO APP (RESET)
         # =========================
         if plow == "/reset historico":
-            # “soft reset”: apaga resumo rolante e marca reset (não deleta Mongo)
             set_fact(usuario_key, "mary.rs.v2", "", {"fonte": "cmd"})
             set_fact(usuario_key, "mary.rs.v2.ts", time.time(), {"fonte": "cmd"})
             set_fact(usuario_key, "mary.reset.historico.ts", time.time(), {"fonte": "cmd"})
@@ -629,7 +671,6 @@ class MaryService(BaseCharacter):
             return "✅ Reset de sessão aplicado: resumo rolante limpo. Vamos seguir daqui com leveza e continuidade."
 
         if plow == "/reset total":
-            # “harder reset”: zera resumo + “apaga” eventos/entidades setando vazio
             f_all = cached_get_facts(usuario_key) or {}
             for k in list(f_all.keys()):
                 if isinstance(k, str) and (k.startswith("mary.evento.") or k.startswith("mary.eventos.") or k.startswith("mary.ent.")):
@@ -643,7 +684,6 @@ class MaryService(BaseCharacter):
             clear_user_cache(usuario_key)
             return "⚠️ RESET TOTAL aplicado: eventos/entidades e resumo rolante foram limpos (no nível de facts)."
 
-        # comandos básicos
         if plow.startswith("/local "):
             novo_local = prompt[len("/local "):].strip()
             if novo_local:
@@ -668,7 +708,6 @@ class MaryService(BaseCharacter):
         tags = _detect_thematic_tags_from_prompt(prompt)
         thematic_block = _get_thematic_memories_for_tags(usuario_key, tags)
 
-        # foco sensorial rotativo (estável e leve)
         foco_pool = ["cabelo", "olhos", "lábios/boca", "mãos/toque", "respiração", "perfume", "pele/temperatura", "voz/timbre", "sorriso"]
         idx = int(st.session_state.get("mary_attr_idx", -1))
         idx = (idx + 1) % len(foco_pool)
@@ -680,14 +719,12 @@ class MaryService(BaseCharacter):
         docs = cached_get_history(usuario_key) or []
         evidence = self._compact_user_evidence(docs, max_chars=320)
 
-        # eventos fixos (capado)
         eventos_dict = _collect_mary_events_from_facts(f_all)
         events_block = ""
         if eventos_dict:
             linhas = [f"- {label}: {str(val).strip()}" for label, val in sorted(eventos_dict.items()) if str(val).strip()]
             events_block = "\n".join(linhas)[:1200]
 
-        # lorebook (capado)
         lore_block = _get_lorebook(usuario_key, prompt, k=4, max_chars=900)
 
         system_block = _build_system_block(
@@ -735,7 +772,6 @@ class MaryService(BaseCharacter):
 
         tools_to_use = TOOLS if st.session_state.get("tool_calling_on", False) else None
 
-        # tool-calling com limite (evita travar)
         iteration = 0
         max_iter = 3
         texto = ""
@@ -779,11 +815,15 @@ class MaryService(BaseCharacter):
             if iteration >= max_iter:
                 break
 
-        # Ultra IA opcional
+        # ✅ força gancho de continuidade quando usuário não pediu “conclusão”
+        texto = _ensure_continuation_hook(texto, prompt)
+
         if st.session_state.get("ultra_ia_on", False) and texto:
             try:
                 notes = critic_review(model, system_block, prompt, texto)
                 texto = polish(model, system_block, prompt, texto, notes)
+                # reforça de novo após polish (polish às vezes “fecha” a cena)
+                texto = _ensure_continuation_hook(texto, prompt)
             except Exception as e:
                 _log_error("ultra_ia", e)
 
