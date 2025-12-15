@@ -6,7 +6,13 @@ import streamlit as st
 from characters.mary.service import MaryService, _current_user_key
 from characters.mary.persona import get_persona
 from core.service_router import list_models
-from core.repositories import save_interaction, get_history_docs, get_facts, set_fact
+from core.repositories import (
+    save_interaction,
+    get_history_docs,
+    get_facts,
+    set_fact,
+    delete_last_interaction,   # ✅ AGORA APAGA NO BANCO
+)
 
 # ✅ PRIMEIRA CHAMADA
 st.set_page_config(
@@ -52,6 +58,11 @@ if not check_password():
 # ESTADO / CACHE
 # ==========================================================
 DEFAULT_VISUAL_LIMIT = 80  # evita travar renderizando histórico gigante
+
+
+def _invalidate_backend_cache() -> None:
+    st.session_state["backend_hist_cache"] = None
+    st.session_state["backend_hist_cache_ts"] = 0.0
 
 
 def _get_service() -> MaryService:
@@ -127,17 +138,7 @@ def _colar_fala_inicial_na_tela() -> None:
     intro = _gerar_fala_inicial_e_salvar_backend()
     st.session_state["chat_history"] = [("assistant", intro)]
     st.session_state["mary_intro_done"] = True
-
-
-def _apagar_ultimo_turno_visual() -> None:
-    hist = st.session_state.get("chat_history", [])
-    if not hist:
-        return
-    if len(hist) >= 2 and hist[-1][0] == "assistant" and hist[-2][0] == "user":
-        hist = hist[:-2]
-    else:
-        hist = hist[:-1]
-    st.session_state["chat_history"] = hist
+    _invalidate_backend_cache()
 
 
 def _carregar_chat_visual_do_backend(force: bool = False) -> list[tuple[str, str]]:
@@ -172,6 +173,43 @@ def _carregar_chat_visual_do_backend(force: bool = False) -> list[tuple[str, str
     st.session_state["backend_hist_cache"] = hist
     st.session_state["backend_hist_cache_ts"] = now
     return hist
+
+
+def _sync_tela_com_backend(force: bool = True) -> None:
+    """
+    Fonte de verdade = backend.
+    Recarrega chat_history a partir do Mongo e, se estiver vazio,
+    injeta a fala inicial.
+    """
+    hist = _carregar_chat_visual_do_backend(force=force)
+    if hist:
+        st.session_state["chat_history"] = hist
+        st.session_state["mary_intro_done"] = True
+    else:
+        st.session_state["chat_history"] = []
+        st.session_state["mary_intro_done"] = False
+        _colar_fala_inicial_na_tela()
+
+
+def _apagar_ultimo_turno_backend_e_sync() -> None:
+    """
+    Apaga o último turno NO BANCO e sincroniza a tela pelo backend.
+    """
+    usuario_key = _current_user_key()
+    ok = False
+    try:
+        ok = bool(delete_last_interaction(usuario_key))
+    except Exception as e:
+        st.error(f"Falha ao apagar no banco: {e}")
+        return
+
+    _invalidate_backend_cache()
+    _sync_tela_com_backend(force=True)
+
+    if ok:
+        st.success("Último turno apagado no banco e tela sincronizada.")
+    else:
+        st.warning("Não havia turno para apagar.")
 
 
 def _list_eventos_mary(facts: dict) -> list[tuple[str, str]]:
@@ -234,14 +272,11 @@ def main() -> None:
         with col1:
             if st.button("Recarregar persona", use_container_width=True):
                 _colar_fala_inicial_na_tela()
-                # invalida cache do backend para não “voltar” msg antiga
-                st.session_state["backend_hist_cache"] = None
-                st.session_state["backend_hist_cache_ts"] = 0.0
                 st.rerun()
 
         with col2:
             if st.button("Apagar último turno", use_container_width=True):
-                _apagar_ultimo_turno_visual()
+                _apagar_ultimo_turno_backend_e_sync()
                 st.rerun()
 
         st.markdown("---")
@@ -259,8 +294,7 @@ def main() -> None:
             )
             st.session_state["chat_input"] = ""  # evita reenvio em rerun
             st.session_state["chat_history"].append(("assistant", resp))
-            st.session_state["backend_hist_cache"] = None
-            st.session_state["backend_hist_cache_ts"] = 0.0
+            _invalidate_backend_cache()
             st.rerun()
 
         if st.button("RESET TOTAL (memórias fixas)"):
@@ -271,8 +305,7 @@ def main() -> None:
             )
             st.session_state["chat_input"] = ""
             st.session_state["chat_history"].append(("assistant", resp))
-            st.session_state["backend_hist_cache"] = None
-            st.session_state["backend_hist_cache_ts"] = 0.0
+            _invalidate_backend_cache()
             st.rerun()
 
         st.markdown("---")
@@ -338,7 +371,6 @@ def main() -> None:
 
     if len(hist) > len(visible):
         if st.button("⬆️ Carregar mais mensagens", type="secondary"):
-            # aumenta gradualmente para não travar
             st.session_state["visual_limit"] = min(250, visual_limit + 40)
             st.rerun()
 
@@ -368,8 +400,7 @@ def main() -> None:
         st.session_state["chat_history"].append(("assistant", resposta))
 
         # invalida cache do backend (porque tem msg nova)
-        st.session_state["backend_hist_cache"] = None
-        st.session_state["backend_hist_cache_ts"] = 0.0
+        _invalidate_backend_cache()
 
 
 main()
