@@ -157,12 +157,20 @@ def delete_user_history(usuario: str) -> int:
 def delete_last_interaction(usuario: str) -> bool:
     """
     Remove o último turno (maior ts; fallback _id).
+    Robusto para docs legados sem 'ts'.
     """
+    # 1) tenta por ts
     last = _hist().find_one({"usuario": usuario}, sort=[("ts", -1), ("_id", -1)])
     if not last:
+        # 2) fallback: pode haver docs antigos sem 'ts'
+        last = _hist().find_one({"usuario": usuario}, sort=[("_id", -1)])
+
+    if not last:
         return False
+
     r = _hist().delete_one({"_id": last["_id"]})
-    return int(getattr(r, "deleted_count", 0)) > 0
+    return int(getattr(r, "deleted_count", 0) or 0) > 0
+
 
 
 # ---------- Eventos ----------
@@ -201,9 +209,32 @@ def last_event(usuario: str, tipo: str) -> Optional[Dict[str, Any]]:
     )
 
 
+def _safe_create_index(col_obj, keys):
+    """
+    Tenta criar índice tanto em coleções pymongo puras (create_index)
+    quanto em wrappers (obj._col.create_index).
+    """
+    try:
+        if hasattr(col_obj, "create_index"):
+            col_obj.create_index(keys)
+            return True
+    except Exception:
+        pass
+
+    try:
+        inner = getattr(col_obj, "_col", None)
+        if inner is not None and hasattr(inner, "create_index"):
+            inner.create_index(keys)
+            return True
+    except Exception:
+        pass
+
+    return False
+
+
 def ensure_indexes() -> None:
     """
-    Garante que os índices essenciais existam (melhora performance e evita full-scan).
+    Garante índices essenciais.
     Só roda quando backend for mongo.
     """
     try:
@@ -212,13 +243,13 @@ def ensure_indexes() -> None:
             return
 
         # History: busca por usuario, ordenado por data
-        _hist()._col.create_index([("usuario", 1), ("ts", 1), ("_id", 1)])
+        _safe_create_index(_hist(), [("usuario", 1), ("ts", 1), ("_id", 1)])
 
-        # State: busca por usuario (chave única conceitual)
-        _state()._col.create_index([("usuario", 1)])
+        # State: busca por usuario
+        _safe_create_index(_state(), [("usuario", 1)])
 
         # Events: busca por usuario, mais recentes
-        _events()._col.create_index([("usuario", 1), ("ts", -1), ("_id", -1)])
+        _safe_create_index(_events(), [("usuario", 1), ("ts", -1), ("_id", -1)])
 
     except Exception:
         pass
