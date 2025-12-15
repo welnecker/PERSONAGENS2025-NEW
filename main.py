@@ -2,6 +2,12 @@
 from __future__ import annotations
 import streamlit as st
 
+st.set_page_config(
+    page_title="PERSONAGENS 2025",
+    page_icon="🎭",
+    layout="centered",
+)
+
 # ==== BLOQUEIO POR SENHA PARA O MARY_APP ====
 
 SENHA_CORRETA = "141267"   # ← coloque aqui a senha que quiser
@@ -34,13 +40,6 @@ def check_password():
 # ---- BLOQUEIA EXECUÇÃO DO APP SE A SENHA NÃO FOR VALIDADA ----
 if not check_password():
     st.stop()
-
-
-st.set_page_config(
-    page_title="PERSONAGENS 2025",
-    page_icon="🎭",
-    layout="centered",
-)
 
 st.title("PERSONAGENS 2025 – Escolha da Personagem 🎭")
 
