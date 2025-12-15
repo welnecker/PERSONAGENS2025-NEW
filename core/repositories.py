@@ -13,71 +13,6 @@ _events = lambda: get_col("events")
 
 
 # ---------- helpers internos ----------
-def _delete_dotted(d: Dict[str, Any], dotted: str) -> bool:
-    """
-    Remove a chave 'a.b.c' de um dict aninhado, limpando dicts vazios no caminho.
-    Retorna True se removeu algo.
-    """
-    parts = [p for p in (dotted or "").split(".") if p]
-    if not parts:
-        return False
-
-    stack = [d]
-    cur = d
-    for p in parts[:-1]:
-        if not isinstance(cur, dict) or p not in cur or not isinstance(cur[p], dict):
-            return False
-        cur = cur[p]
-        stack.append(cur)
-
-    last = parts[-1]
-    if not isinstance(cur, dict) or last not in cur:
-        return False
-
-    # remove a folha
-    del cur[last]
-
-    # cleanup: remove dicts vazios do fim para o início (exceto a raiz)
-    for i in range(len(stack) - 1, 0, -1):
-        node = stack[i]
-        parent = stack[i - 1]
-        # nome da chave deste node dentro do parent
-        for k, v in list(parent.items()):
-            if v is node and isinstance(v, dict) and not v:
-                del parent[k]
-                break
-
-    return True
-
-
-# ---------- Fatos ----------
-def get_facts(usuario: str) -> Dict[str, Any]:
-    d = _state().find_one({"usuario": usuario})
-    return d.get("fatos", {}) if d else {}
-
-
-def get_fact(usuario: str, key: str, default: Any = None) -> Any:
-    d = _state().find_one({"usuario": usuario})
-    if not d:
-        return default
-    cur = d.get("fatos", {})
-    # acesso raso ou pontilhado
-    for part in key.split("."):
-        if not isinstance(cur, dict) or part not in cur:
-            return default
-        cur = cur[part]
-    return cur
-
-
-def set_fact(usuario: str, key: str, value: Any, meta: Optional[Dict[str, Any]] = None) -> None:
-    meta = meta or {}
-    _state().update_one(
-        {"usuario": usuario},
-        {"$set": {f"usuario": usuario, f"fatos.{key}": value, "meta": meta}},
-        upsert=True
-    )
-
-
 def _delete_dotted(root: Dict[str, Any], dotted_key: str) -> bool:
     """
     Remove a chave `dotted_key` (ex.: "perfil.endereco.rua") de um dict aninhado,
@@ -86,14 +21,20 @@ def _delete_dotted(root: Dict[str, Any], dotted_key: str) -> bool:
     """
     if not dotted_key:
         return False
-    parts = dotted_key.split(".")
-    stack = []
-    cur = root
+
+    parts = [p for p in dotted_key.split(".") if p]
+    if not parts:
+        return False
+
+    stack: List[tuple[Dict[str, Any], str]] = []
+    cur: Any = root
+
     for p in parts[:-1]:
         if not isinstance(cur, dict) or p not in cur:
             return False
         stack.append((cur, p))
         cur = cur[p]
+
     leaf = parts[-1]
     if not isinstance(cur, dict) or leaf not in cur:
         return False
@@ -109,13 +50,48 @@ def _delete_dotted(root: Dict[str, Any], dotted_key: str) -> bool:
             del parent[key]
         else:
             break
+
     return True
+
+
+# ---------- Fatos ----------
+def get_facts(usuario: str) -> Dict[str, Any]:
+    d = _state().find_one({"usuario": usuario})
+    return d.get("fatos", {}) if d else {}
+
+
+def get_fact(usuario: str, key: str, default: Any = None) -> Any:
+    d = _state().find_one({"usuario": usuario})
+    if not d:
+        return default
+    cur: Any = d.get("fatos", {})
+    for part in (key or "").split("."):
+        if not isinstance(cur, dict) or part not in cur:
+            return default
+        cur = cur[part]
+    return cur
+
+
+def set_fact(usuario: str, key: str, value: Any, meta: Optional[Dict[str, Any]] = None) -> None:
+    """
+    Seta um fact (suporta chave pontilhada no storage, pois vira 'fatos.<key>').
+    """
+    meta = meta or {}
+    _state().update_one(
+        {"usuario": usuario},
+        {"$set": {
+            "usuario": usuario,
+            f"fatos.{key}": value,
+            "meta": meta
+        }},
+        upsert=True
+    )
 
 
 def delete_fact(usuario: str, key: str) -> bool:
     """
     Remove uma memória canônica (suporta chave pontilhada).
-    Compatível com backend de memória e Mongo.
+    Atualiza o bloco 'fatos' inteiro (mais robusto que depender de $unset).
     """
     doc = _state().find_one({"usuario": usuario})
     if not doc:
@@ -125,7 +101,6 @@ def delete_fact(usuario: str, key: str) -> bool:
     if not _delete_dotted(facts, key):
         return False
 
-    # Atualiza 'fatos' como bloco (evita depender de $unset no backend memória)
     _state().update_one({"usuario": usuario}, {"$set": {"fatos": facts}}, upsert=True)
     return True
 
@@ -149,30 +124,34 @@ def get_history_docs(usuario: str, limit: int = 400) -> List[Dict[str, Any]]:
     Histórico por uma única chave de usuário/personagem.
     Ordena por ts asc; fallback _id asc.
     """
-    return list(_hist().find(
-        {"usuario": usuario},
-        sort=[("ts", 1), ("_id", 1)],
-        limit=limit
-    ))
+    cur = (
+        _hist()
+        .find({"usuario": usuario})
+        .sort([("ts", 1), ("_id", 1)])
+        .limit(limit)
+    )
+    return list(cur)
 
 
 def get_history_docs_multi(users_or_keys: List[str], limit: int = 400) -> List[Dict[str, Any]]:
     """
     Histórico unificado para várias chaves (ex.: ["Janio::laura", "Janio"]).
-    Útil para Mary (legado) + chave nova por persona.
     """
     keys = [k for k in (users_or_keys or []) if k]
     if not keys:
         return []
-    return list(_hist().find(
-        {"usuario": {"$in": keys}},
-        sort=[("ts", 1), ("_id", 1)],
-        limit=limit
-    ))
+    cur = (
+        _hist()
+        .find({"usuario": {"$in": keys}})
+        .sort([("ts", 1), ("_id", 1)])
+        .limit(limit)
+    )
+    return list(cur)
 
 
 def delete_user_history(usuario: str) -> int:
-    return _hist().delete_many({"usuario": usuario})
+    r = _hist().delete_many({"usuario": usuario})
+    return int(getattr(r, "deleted_count", 0))
 
 
 def delete_last_interaction(usuario: str) -> bool:
@@ -182,8 +161,8 @@ def delete_last_interaction(usuario: str) -> bool:
     last = _hist().find_one({"usuario": usuario}, sort=[("ts", -1), ("_id", -1)])
     if not last:
         return False
-    deleted = _hist().delete_many({"_id": last["_id"]})
-    return deleted > 0
+    r = _hist().delete_one({"_id": last["_id"]})
+    return int(getattr(r, "deleted_count", 0)) > 0
 
 
 # ---------- Eventos ----------
@@ -205,11 +184,13 @@ def register_event(
 
 
 def list_events(usuario: str, limit: int = 5) -> List[Dict[str, Any]]:
-    return list(_events().find(
-        {"usuario": usuario},
-        sort=[("ts", -1), ("_id", -1)],
-        limit=limit
-    ))
+    cur = (
+        _events()
+        .find({"usuario": usuario})
+        .sort([("ts", -1), ("_id", -1)])
+        .limit(limit)
+    )
+    return list(cur)
 
 
 # ---------- Utilidades ----------
@@ -220,17 +201,10 @@ def last_event(usuario: str, tipo: str) -> Optional[Dict[str, Any]]:
     )
 
 
-    return {
-        "hist": _hist().delete_many({"usuario": usuario}),
-        "state": _state().delete_many({"usuario": usuario}),
-        "eventos": _events().delete_many({"usuario": usuario}),
-        "perfil": 0,
-    }
-
-
 def ensure_indexes() -> None:
     """
-    Garante que os índices essenciais existam (Melhora performance e evita full-scan).
+    Garante que os índices essenciais existam (melhora performance e evita full-scan).
+    Só roda quando backend for mongo.
     """
     try:
         from .database import get_backend
@@ -239,13 +213,12 @@ def ensure_indexes() -> None:
 
         # History: busca por usuario, ordenado por data
         _hist()._col.create_index([("usuario", 1), ("ts", 1), ("_id", 1)])
-        
+
         # State: busca por usuario (chave única conceitual)
         _state()._col.create_index([("usuario", 1)])
-        
+
         # Events: busca por usuario, mais recentes
-        _events()._col.create_index([("usuario", 1), ("ts", -1)])
-        
+        _events()._col.create_index([("usuario", 1), ("ts", -1), ("_id", -1)])
+
     except Exception:
-        # Silencia erros de indexação para não quebrar o app
         pass
