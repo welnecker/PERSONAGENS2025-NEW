@@ -11,7 +11,8 @@ from core.repositories import (
     get_history_docs,
     get_facts,
     set_fact,
-    delete_last_interaction,   # ✅ AGORA APAGA NO BANCO
+    delete_last_interaction,   # ✅ IMPORTANTE
+    delete_user_history,       # (vai ser usado no reset total se você quiser)
 )
 
 # ✅ PRIMEIRA CHAMADA
@@ -25,7 +26,6 @@ st.set_page_config(
 # BLOQUEIO POR SENHA
 # ==========================================================
 SENHA_CORRETA = "141267"
-
 
 def check_password() -> bool:
     if "senha_ok" not in st.session_state:
@@ -50,29 +50,24 @@ def check_password() -> bool:
 
     return False
 
-
 if not check_password():
     st.stop()
 
 # ==========================================================
 # ESTADO / CACHE
 # ==========================================================
-DEFAULT_VISUAL_LIMIT = 80  # evita travar renderizando histórico gigante
-
-
-def _invalidate_backend_cache() -> None:
-    st.session_state["backend_hist_cache"] = None
-    st.session_state["backend_hist_cache_ts"] = 0.0
-
+DEFAULT_VISUAL_LIMIT = 80
 
 def _get_service() -> MaryService:
-    # Reaproveitar instância ajuda a reduzir custo em reruns.
     svc = st.session_state.get("_mary_service")
     if svc is None:
         svc = MaryService()
         st.session_state["_mary_service"] = svc
     return svc
 
+def _invalidate_backend_cache() -> None:
+    st.session_state["backend_hist_cache"] = None
+    st.session_state["backend_hist_cache_ts"] = 0.0
 
 def _garantir_estado_inicial() -> None:
     if "user_id" not in st.session_state or not st.session_state["user_id"]:
@@ -94,16 +89,13 @@ def _garantir_estado_inicial() -> None:
     if "mary_intro_done" not in st.session_state:
         st.session_state["mary_intro_done"] = False
 
-    # limite visual para não “matar” a página
     if "visual_limit" not in st.session_state:
         st.session_state["visual_limit"] = DEFAULT_VISUAL_LIMIT
 
-    # cache do backend (evita buscar toda hora)
     if "backend_hist_cache" not in st.session_state:
         st.session_state["backend_hist_cache"] = None
     if "backend_hist_cache_ts" not in st.session_state:
         st.session_state["backend_hist_cache_ts"] = 0.0
-
 
 def _gerar_fala_inicial_e_salvar_backend() -> str:
     try:
@@ -124,35 +116,29 @@ def _gerar_fala_inicial_e_salvar_backend() -> str:
             "\"Então… vamos continuar de onde a gente parou, amor?\""
         )
 
-    # registra uma vez no backend (se falhar, não derruba)
+    # ✅ Evita duplicar infinitamente: só salva se ainda não tem histórico algum
     try:
         usuario_key = _current_user_key()
-        save_interaction(usuario_key, "[FALA_INICIAL_MARY]", intro, "mary-persona-static")
+        docs = get_history_docs(usuario_key, limit=1) or []
+        if not docs:
+            save_interaction(usuario_key, "[FALA_INICIAL_MARY]", intro, "mary-persona-static")
     except Exception:
         pass
 
     return intro
 
-
 def _colar_fala_inicial_na_tela() -> None:
     intro = _gerar_fala_inicial_e_salvar_backend()
     st.session_state["chat_history"] = [("assistant", intro)]
     st.session_state["mary_intro_done"] = True
-    _invalidate_backend_cache()
-
 
 def _carregar_chat_visual_do_backend(force: bool = False) -> list[tuple[str, str]]:
-    """
-    Reconstrói chat visual via Mongo.
-    - Com cache (session_state) pra não puxar toda hora.
-    - Atualiza no máximo a cada ~3s (ajuste se quiser).
-    """
     now = time.time()
 
     if not force:
         cached = st.session_state.get("backend_hist_cache")
         ts = float(st.session_state.get("backend_hist_cache_ts", 0.0))
-        if cached is not None and (now - ts) < 3.0:
+        if cached is not None and (now - ts) < 2.0:
             return cached
 
     try:
@@ -174,43 +160,36 @@ def _carregar_chat_visual_do_backend(force: bool = False) -> list[tuple[str, str
     st.session_state["backend_hist_cache_ts"] = now
     return hist
 
+def _apagar_ultimo_turno_backend_e_sync() -> None:
+    """
+    ✅ Apaga DO BANCO e sincroniza a tela.
+    Isso resolve definitivamente o seu problema de “apaga na tela mas volta”.
+    """
+    usuario_key = _current_user_key()
 
-def _sync_tela_com_backend(force: bool = True) -> None:
-    """
-    Fonte de verdade = backend.
-    Recarrega chat_history a partir do Mongo e, se estiver vazio,
-    injeta a fala inicial.
-    """
-    hist = _carregar_chat_visual_do_backend(force=force)
-    if hist:
-        st.session_state["chat_history"] = hist
+    ok = False
+    try:
+        ok = delete_last_interaction(usuario_key)
+    except Exception as e:
+        st.error(f"Falha ao apagar no backend: {e}")
+        return
+
+    _invalidate_backend_cache()
+
+    # sempre reconstrói do backend após deletar
+    backend_hist = _carregar_chat_visual_do_backend(force=True)
+
+    if backend_hist:
+        st.session_state["chat_history"] = backend_hist
         st.session_state["mary_intro_done"] = True
     else:
+        # se ficou vazio, volta a intro
         st.session_state["chat_history"] = []
         st.session_state["mary_intro_done"] = False
         _colar_fala_inicial_na_tela()
 
-
-def _apagar_ultimo_turno_backend_e_sync() -> None:
-    """
-    Apaga o último turno NO BANCO e sincroniza a tela pelo backend.
-    """
-    usuario_key = _current_user_key()
-    ok = False
-    try:
-        ok = bool(delete_last_interaction(usuario_key))
-    except Exception as e:
-        st.error(f"Falha ao apagar no banco: {e}")
-        return
-
-    _invalidate_backend_cache()
-    _sync_tela_com_backend(force=True)
-
-    if ok:
-        st.success("Último turno apagado no banco e tela sincronizada.")
-    else:
-        st.warning("Não havia turno para apagar.")
-
+    if not ok:
+        st.warning("Não havia turno para apagar no backend (histórico vazio ou já apagado).")
 
 def _list_eventos_mary(facts: dict) -> list[tuple[str, str]]:
     eventos: list[tuple[str, str]] = []
@@ -225,7 +204,6 @@ def _list_eventos_mary(facts: dict) -> list[tuple[str, str]]:
             eventos.append((k.replace("mary.eventos.", "", 1), str(v)))
     eventos.sort(key=lambda x: x[0])
     return eventos
-
 
 # ==========================================================
 # APP
@@ -242,7 +220,6 @@ def main() -> None:
 
         st.text_input("👤 Usuário", key="user_id")
 
-        # Modelos
         try:
             all_models = list_models() or []
         except Exception:
@@ -272,6 +249,7 @@ def main() -> None:
         with col1:
             if st.button("Recarregar persona", use_container_width=True):
                 _colar_fala_inicial_na_tela()
+                _invalidate_backend_cache()
                 st.rerun()
 
         with col2:
@@ -292,7 +270,7 @@ def main() -> None:
                 user=st.session_state.get("user_id", "Janio"),
                 model=st.session_state.get("model"),
             )
-            st.session_state["chat_input"] = ""  # evita reenvio em rerun
+            st.session_state["chat_input"] = ""
             st.session_state["chat_history"].append(("assistant", resp))
             _invalidate_backend_cache()
             st.rerun()
@@ -353,7 +331,7 @@ def main() -> None:
             step=10,
         )
 
-    # ========= BOOT: recuperar histórico do backend / fala inicial =========
+    # ========= BOOT =========
     if not st.session_state["chat_history"]:
         backend_hist = _carregar_chat_visual_do_backend(force=False)
 
@@ -364,43 +342,34 @@ def main() -> None:
             if not st.session_state.get("mary_intro_done", False):
                 _colar_fala_inicial_na_tela()
 
-    # ========= RENDER HISTÓRICO (com limite) =========
+    # ========= RENDER HISTÓRICO =========
     hist = st.session_state.get("chat_history", [])
     visual_limit = int(st.session_state.get("visual_limit", DEFAULT_VISUAL_LIMIT))
     visible = hist[-visual_limit:] if len(hist) > visual_limit else hist
-
-    if len(hist) > len(visible):
-        if st.button("⬆️ Carregar mais mensagens", type="secondary"):
-            st.session_state["visual_limit"] = min(250, visual_limit + 40)
-            st.rerun()
 
     for role, content in visible:
         with st.chat_message(role):
             st.markdown(content)
 
-    # ========= INPUT DO USUÁRIO =========
+    # ========= INPUT =========
     prompt = st.chat_input("Fala algo pra Mary...")
     if prompt:
-        # mostrar user imediatamente
         st.session_state["chat_history"].append(("user", prompt))
         with st.chat_message("user"):
             st.markdown(prompt)
 
-        # chamar service
         st.session_state["chat_input"] = prompt
         resposta = svc.reply(
             user=st.session_state.get("user_id", "Janio"),
             model=st.session_state.get("model"),
         )
-        st.session_state["chat_input"] = ""  # ✅ evita reenvio em rerun
+        st.session_state["chat_input"] = ""
 
         with st.chat_message("assistant"):
             st.markdown(resposta)
 
         st.session_state["chat_history"].append(("assistant", resposta))
 
-        # invalida cache do backend (porque tem msg nova)
         _invalidate_backend_cache()
-
 
 main()
