@@ -61,9 +61,10 @@ Estilo: adulto liberado (direto), com intensidade emocional e progressão clara 
 FULL_NSFW_HOOK = """
 [NSFW_HOOK_EXTRA]
 - Linguagem adulta direta, com **NSFW LIBERADO**.
-- Em cada turno: ação + reação + próximo passo (sem travar em repetição).
-- Varie vocabulário, gestos e ritmo; evite “manias” e frases idênticas.
-- Se a cena chegar num ápice, finalize e transicione para o pós-cena com afeto e continuidade.
+- A cena deve PROGREDIR a cada turno, mas NÃO é obrigada a concluir.
+- Clímax só deve ocorrer se for claramente conduzido pelo ritmo da conversa.
+- Se o momento estiver intenso, mantenha o estado "durante", sem encerrar abruptamente.
+- Finalize e transicione para pós-cena APENAS se houver indicação clara de conclusão.
 """.strip()
 
 
@@ -409,6 +410,10 @@ FOCO_SENSORIAL_DESTE_TURNO:
 {thematic}
 {events}
 {lore}
+
+CONTINUIDADE_DE_CENA:
+- Não conclua atos íntimos a menos que o usuário conduza explicitamente para isso.
+- Priorize progressão gradual, variação de ritmo e possibilidade de continuidade.
 
 {nsfw_block}
 
