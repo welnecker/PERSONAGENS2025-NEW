@@ -365,111 +365,71 @@ def _user_requested_conclusion(prompt: str) -> bool:
     return any(k in p for k in keys)
 
 
+import random
+import hashlib
+import re
+
 def _looks_like_conclusion(text: str) -> bool:
-    """
-    Heurística simples: detecta semântica de encerramento/pós-cena.
-    Mantém genérico (não explícito).
-    """
     t = (text or "").lower()
-    endings = [
-        "depois disso",
-        "mais tarde",
-        "no fim",
-        "quando tudo terminou",
-        "acabou",
-        "exaustos",
-        "satisfeitos",
-        "ficamos ali",
-        "adormecemos",
-        "finalmente terminou",
-        "e então terminou",
+
+    # sinais comuns de “fechou a cena” (pós-ato, descanso, encerramento completo)
+    patterns = [
+        r"\bdepois\b.*\bfica(mos)?\b",
+        r"\bacab(ou|a|amos)\b",
+        r"\btermin(ou|a|amos)\b",
+        r"\bfinaliz(ou|a|amos)\b",
+        r"\bpós\b[- ]?(ato|clímax|prazer)\b",
+        r"\badormec(emos|i|eu)\b",
+        r"\bfim\b",
+        r"\bagora\s+é\s+só\s+descansar\b",
+        r"\bfica\s+tudo\s+em\s+silêncio\b",
     ]
-    tail = t[-700:] if len(t) > 700 else t
-    return any(e in tail for e in endings)
+    return any(re.search(p, t) for p in patterns)
 
-
-# Micro-ganchos variáveis (sem “carimbo” e sem explícito)
-_CONTINUATION_MICRO = [
-    # ação suspensa
-    "paro no meio do gesto, mantendo o contato",
-    "fico ali por um instante, sustentando o ritmo sem fechar nada",
-    "respiro fundo e não apresso o desfecho",
-    "continuo bem perto, como se ainda estivesse no meio do caminho",
-    "seguro o clima no lugar, sem transformar isso em final",
-
-    # estado emocional/atmosfera
-    "a tensão continua viva entre nós",
-    "o clima não se desfaz — ainda está acontecendo",
-    "meu corpo ainda responde ao que a gente começou",
-    "o silêncio fica carregado, como se pedisse continuação",
-
-    # condução sutil
-    "deixando espaço para você conduzir o próximo passo",
-    "sem decidir por você onde isso termina",
-    "sem trocar intensidade por encerramento",
-]
-
-
-def _reopen_without_fixed_hook(texto: str) -> str:
-    """
-    Reabre sem frase padrão:
-    - remove fechamento óbvio, se existir
-    - termina com pontuação “aberta”
-    - acrescenta UMA micro-linha variável (não fixa) para manter continuidade
-    """
-    t = (texto or "").rstrip()
+def _already_open_ended(text: str) -> bool:
+    t = (text or "").strip()
     if not t:
-        return t
+        return True
+    # pergunta / reticências / travessão / frase interrompida
+    return bool(re.search(r"(\?|\.\.\.|—)\s*$", t))
 
-    # remove trechos de fechamento explícito “pós-cena”
-    t = re.sub(
-        r"(depois disso|mais tarde|no fim|quando tudo terminou|finalmente).*",
-        "",
-        t,
-        flags=re.I | re.S,
-    ).rstrip()
+def _pick_hook(prompt: str, last_text: str) -> str:
+    # varia de forma estável para não repetir (hash do contexto)
+    seed_src = (prompt or "") + "||" + (last_text[-80:] if last_text else "")
+    seed = int(hashlib.md5(seed_src.encode("utf-8")).hexdigest()[:8], 16)
+    rng = random.Random(seed)
 
-    # garante final “aberto”
-    if not t.endswith(("…", "—")):
-        # se termina com ponto muito final, troca por reticências
-        if t.endswith("."):
-            t = t[:-1] + "…"
-        else:
-            t += "…"
+    hooks = [
+        # 1) ação em andamento (sem pergunta padrão)
+        "\n\nEu não paro — só diminuo um instante, ainda perto demais, como se estivesse esperando você conduzir o próximo passo…",
+        # 2) convite curto e natural
+        "\n\nEu mordo o lábio, sentindo o corpo responder, e deixo isso no ar — do jeito que você gosta…",
+        # 3) pausa no ápice (sem “olha nos olhos”)
+        "\n\nEu prendo a respiração por um segundo, na beira, e não passo dali sem você…",
+        # 4) continuidade com gesto (sem frase fixa)
+        "\n\nEu encosto em você de novo, devagar, como se estivesse recomeçando a mesma onda — sem pressa de acabar…",
+        # 5) gancho sem romantização robótica
+        "\n\nEu fico no meio do caminho, quente e presente, deixando o próximo movimento depender do que você fizer agora…",
+    ]
+    return rng.choice(hooks)
 
-    micro = random.choice(_CONTINUATION_MICRO)
-
-    # Evita duplicar se texto já contém algo muito parecido
-    tlow = t.lower()
-    if any(k in tlow for k in ["meio do caminho", "não apresso", "sem fechar", "continua viva", "ainda está acontecendo"]):
-        return t
-
-    return f"{t}\n\n{micro}."
-
-
-def _enforce_scene_flow(texto: str, prompt: str, usuario_key: str) -> str:
-    """
-    Regra:
-    - Se usuário NÃO pediu conclusão, não deixa a resposta cair em “pós-cena/encerramento”.
-    - Sem texto fixo: usa micro-variação.
-    """
+def _ensure_continuation_hook(texto: str, prompt: str) -> str:
     t = (texto or "").strip()
     if not t:
         return t
 
     if _user_requested_conclusion(prompt):
-        # usuário conduziu para finalizar -> não interfere
         return t
 
+    # se já está aberto, não mexe
+    if _already_open_ended(t):
+        return t
+
+    # se parece que encerrou, reabre com gancho variável
     if _looks_like_conclusion(t):
-        return _reopen_without_fixed_hook(t)
+        return t + _pick_hook(prompt, t)
 
-    # Também reabre se termina “fechado” demais (ponto final e tom conclusivo)
-    if t.endswith(".") and len(t) > 180:
-        # heurística leve: não mexe se já termina com pergunta/exclamação/reticências
-        if not t.endswith(("?.", "!.", "…")):
-            return _reopen_without_fixed_hook(t)
-
+    # caso não pareça conclusão, não força nada
     return t
 
 
