@@ -21,12 +21,11 @@ import streamlit as st
 from core.common.base_service import BaseCharacter
 from core.memoria_longa import topk as lore_topk
 from core.repositories import (
-    get_fact,
-    get_facts,
-    get_history_docs,
-    save_interaction,
-    set_fact,
+    get_fact, get_facts, get_history_docs,
+    save_interaction, set_fact,
+    delete_fact,   # ✅ NOVO
 )
+
 from core.service_router import list_models, route_chat_strict
 from core.tokens import toklen
 from core.ultra import critic_review, polish
@@ -99,6 +98,24 @@ def nsfw_enabled(usuario_key: str) -> bool:
         pass
 
     return True
+
+def _flatten_facts(root: Any, prefix: str = "") -> Dict[str, Any]:
+    """
+    Converte dict aninhado em dict plano com chaves pontilhadas.
+    Ex: {"mary":{"evento":{"x":1}}} -> {"mary.evento.x": 1}
+    """
+    out: Dict[str, Any] = {}
+    if isinstance(root, dict):
+        for k, v in root.items():
+            if not isinstance(k, str):
+                continue
+            p = f"{prefix}.{k}" if prefix else k
+            if isinstance(v, dict):
+                out.update(_flatten_facts(v, p))
+            else:
+                out[p] = v
+    return out
+
 
 
 # ==========================================================
@@ -271,9 +288,12 @@ def _llm_summarize(model_id: str, text: str) -> str:
 # ENTIDADES / EVENTOS
 # ==========================================================
 def _entities_to_line(f: Dict[str, Any]) -> str:
+    flat = _flatten_facts(f or {})
     ents = []
-    for k, v in (f or {}).items():
-        if isinstance(k, str) and k.startswith("mary.ent.") and v:
+    for k, v in flat.items():
+        if not v:
+            continue
+        if k.startswith("mary.ent."):
             label = k.replace("mary.ent.", "", 1)
             vs = str(v).strip()
             if vs:
@@ -281,13 +301,13 @@ def _entities_to_line(f: Dict[str, Any]) -> str:
     return "; ".join(sorted(ents)) if ents else "—"
 
 
-def _collect_mary_events_from_facts(facts: Dict[str, Any]) -> Dict[str, str]:
-    eventos: Dict[str, str] = {}
-    if not isinstance(facts, dict):
-        return eventos
 
-    for k, v in facts.items():
-        if not isinstance(k, str) or not v:
+def _collect_mary_events_from_facts(facts: Dict[str, Any]) -> Dict[str, str]:
+    flat = _flatten_facts(facts or {})
+    eventos: Dict[str, str] = {}
+
+    for k, v in flat.items():
+        if not v:
             continue
         if k.startswith("mary.evento."):
             label = k.replace("mary.evento.", "", 1)
@@ -297,7 +317,6 @@ def _collect_mary_events_from_facts(facts: Dict[str, Any]) -> Dict[str, str]:
             eventos[label] = str(v)
 
     return eventos
-
 
 def _detect_thematic_tags_from_prompt(prompt: str) -> List[str]:
     low = (prompt or "").lower()
@@ -663,12 +682,29 @@ class MaryService(BaseCharacter):
         # =========================
         # COMANDOS DO APP (RESET)
         # =========================
-        if plow == "/reset historico":
-            set_fact(usuario_key, "mary.rs.v2", "", {"fonte": "cmd"})
-            set_fact(usuario_key, "mary.rs.v2.ts", time.time(), {"fonte": "cmd"})
-            set_fact(usuario_key, "mary.reset.historico.ts", time.time(), {"fonte": "cmd"})
-            clear_user_cache(usuario_key)
-            return "✅ Reset de sessão aplicado: resumo rolante limpo. Vamos seguir daqui com leveza e continuidade."
+        if plow == "/reset total":
+    f_all = cached_get_facts(usuario_key) or {}
+    flat = _flatten_facts(f_all)
+
+    # apaga eventos/entidades de verdade (remove a chave)
+    for k in list(flat.keys()):
+        if k.startswith(("mary.evento.", "mary.eventos.", "mary.ent.")):
+            try:
+                delete_fact(usuario_key, k)   # ✅ remove a chave, não seta ""
+            except Exception:
+                pass
+
+    # zera resumo rolante
+    try:
+        delete_fact(usuario_key, "mary.rs.v2")
+    except Exception:
+        set_fact(usuario_key, "mary.rs.v2", "", {"fonte": "cmd_reset_total"})
+
+    set_fact(usuario_key, "mary.rs.v2.ts", time.time(), {"fonte": "cmd_reset_total"})
+    set_fact(usuario_key, "mary.reset.total.ts", time.time(), {"fonte": "cmd_reset_total"})
+    clear_user_cache(usuario_key)
+    return "⚠️ RESET TOTAL aplicado: eventos/entidades foram REMOVIDOS e o resumo rolante foi zerado."
+
 
         if plow == "/reset total":
             f_all = cached_get_facts(usuario_key) or {}
