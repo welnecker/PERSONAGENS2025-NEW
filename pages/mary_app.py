@@ -12,7 +12,7 @@ from core.repositories import (
     get_facts,
     set_fact,
     delete_last_interaction,   # ✅ IMPORTANTE
-    delete_user_history,       # (vai ser usado no reset total se você quiser)
+    delete_user_history,       # ✅ usado no botão de apagar histórico do BD
 )
 
 # ✅ PRIMEIRA CHAMADA
@@ -69,6 +69,15 @@ def _invalidate_backend_cache() -> None:
     st.session_state["backend_hist_cache"] = None
     st.session_state["backend_hist_cache_ts"] = 0.0
 
+def _sync_nsfw_to_backend() -> None:
+    """✅ Persiste o toggle NSFW no BD em facts['mary.nsfw']."""
+    usuario_key = _current_user_key()
+    v = bool(st.session_state.get("mary_nsfw_on", True))
+    try:
+        set_fact(usuario_key, "mary.nsfw", v, {"fonte": "sidebar"})
+    except Exception as e:
+        st.error(f"Falha ao salvar NSFW no backend: {e}")
+
 def _garantir_estado_inicial() -> None:
     if "user_id" not in st.session_state or not st.session_state["user_id"]:
         st.session_state["user_id"] = "Janio"
@@ -83,8 +92,18 @@ def _garantir_estado_inicial() -> None:
             modelos = []
         st.session_state["model"] = modelos[0] if modelos else "deepseek/deepseek-chat-v3-0324"
 
+    # ✅ NSFW: tenta carregar do BD 1x, antes do default
     if "mary_nsfw_on" not in st.session_state:
-        st.session_state["mary_nsfw_on"] = True
+        try:
+            usuario_key = _current_user_key()
+            f = get_facts(usuario_key) or {}
+            v = f.get("mary.nsfw", None)
+            if isinstance(v, bool):
+                st.session_state["mary_nsfw_on"] = v
+            else:
+                st.session_state["mary_nsfw_on"] = True
+        except Exception:
+            st.session_state["mary_nsfw_on"] = True
 
     if "mary_intro_done" not in st.session_state:
         st.session_state["mary_intro_done"] = False
@@ -236,10 +255,12 @@ def main() -> None:
 
         st.markdown("---")
 
+        # ✅ NSFW com persistência no BD
         st.checkbox(
             "Modo adulto liberado (NSFW)",
             key="mary_nsfw_on",
             help="ON = adulto direto. OFF = sugestivo/romântico.",
+            on_change=_sync_nsfw_to_backend,
         )
 
         st.markdown("---")
@@ -319,6 +340,25 @@ def main() -> None:
                     st.rerun()
                 except Exception as e:
                     st.error(f"Falha ao salvar local: {e}")
+
+        st.markdown("---")
+        st.subheader("🧨 Perigo — Banco de Dados")
+
+        st.caption("Isso apaga o HISTÓRICO (coleção history) desta Mary para este usuário. Não apaga coleções inteiras.")
+        confirmar = st.checkbox("Confirmo que quero apagar TODO o histórico do BD desta Mary", value=False)
+        if st.button("APAGAR HISTÓRICO DO BD (Mary)"):
+            if not confirmar:
+                st.error("Marque a confirmação primeiro.")
+            else:
+                try:
+                    n = delete_user_history(usuario_key)
+                    _invalidate_backend_cache()
+                    st.session_state["chat_history"] = []
+                    st.session_state["mary_intro_done"] = False
+                    st.success(f"Histórico apagado do BD: {n} registros.")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Falha ao apagar histórico do BD: {e}")
 
         st.markdown("---")
         st.subheader("🧾 Histórico visual (performance)")
