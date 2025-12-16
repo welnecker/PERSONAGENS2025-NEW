@@ -9,6 +9,7 @@ from core.service_router import list_models
 from core.repositories import (
     save_interaction,
     get_history_docs,
+    get_history_docs_multi, 
     get_facts,
     set_fact,
     delete_last_interaction,   # ✅ IMPORTANTE
@@ -160,9 +161,17 @@ def _carregar_chat_visual_do_backend(force: bool = False) -> list[tuple[str, str
         if cached is not None and (now - ts) < 2.0:
             return cached
 
+    # ✅ chave nova e chave legada
+    usuario_key = _current_user_key()  # ex: "Janio::mary"
+    usuario_legado = str(st.session_state.get("user_id") or "").strip()  # ex: "Janio"
+
     try:
-        usuario_key = _current_user_key()
-        docs = get_history_docs(usuario_key) or []
+        # ✅ tenta trazer histórico tanto do formato novo quanto do legado
+        keys = [usuario_key]
+        if usuario_legado and usuario_legado != usuario_key:
+            keys.append(usuario_legado)
+
+        docs = get_history_docs_multi(keys, limit=400) or []
     except Exception:
         docs = []
 
@@ -238,6 +247,8 @@ def main() -> None:
         st.header("Mary – Controles")
 
         st.text_input("👤 Usuário", key="user_id")
+        st.caption(f"🔑 usuario_key atual: { _current_user_key() }")
+
 
         try:
             all_models = list_models() or []
