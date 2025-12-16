@@ -5,13 +5,14 @@ MaryService (refatorado)
 - Mantém: memória canônica (facts), resumo rolante, eventos fixos mary.evento.*, lorebook, tool-calling opcional.
 - Ajusta: NSFW como toggle + bloco curto e estável (sem “cartilha” gigante no system).
 - Corrige: riscos de travamento (loops, warnings em excesso), e implementa /reset historico e /reset total.
-- NOVO: trava anti-“finalizar o ato” + gancho obrigatório de continuidade quando usuário não pede conclusão.
+- NOVO (CORRETO): trava anti-finalização + reabertura SEM texto fixo (micro-gancho variável, sem carimbo repetitivo).
 
 Importante: este arquivo NÃO inclui texto sexual gráfico.
 """
 
 import json
 import logging
+import random
 import re
 import time
 from typing import Any, Dict, List, Tuple
@@ -21,11 +22,12 @@ import streamlit as st
 from core.common.base_service import BaseCharacter
 from core.memoria_longa import topk as lore_topk
 from core.repositories import (
-    get_fact, get_facts, get_history_docs,
-    save_interaction, set_fact,
-    delete_fact,   # ✅ NOVO
+    get_fact,
+    get_facts,
+    get_history_docs,
+    save_interaction,
+    set_fact,
 )
-
 from core.service_router import list_models, route_chat_strict
 from core.tokens import toklen
 from core.ultra import critic_review, polish
@@ -47,25 +49,22 @@ SAFE_SENSUAL_STYLE = """
 Estilo: romance adulto, tensão, intimidade e sugestão.
 - Evite detalhes gráficos; foque em clima, emoção, desejo, presença e condução da cena.
 - Mantenha continuidade e cumplicidade, sem cair em censura robótica.
-- NÃO finalize a cena de forma “conclusiva”; deixe gancho para o próximo turno.
+- NÃO finalize a cena de forma conclusiva; deixe espaço real para o próximo turno.
 """.strip()
 
 NSFW_TOGGLE_STYLE = """
 [NSFW_ON]
 Estilo: adulto liberado (direto), com intensidade emocional e progressão clara de cena.
-- A cena PROGRIDE a cada turno, mas NÃO precisa (e não deve) concluir automaticamente.
+- A cena PROGRIDE a cada turno, mas NÃO deve concluir automaticamente.
 - Só conclua (clímax/pós-cena) se o usuário conduzir explicitamente para conclusão.
-- Se a tensão subir, mantenha o estado "durante" e PARE no ápice com gancho claro.
 - Evite repetição mecânica de frases/manias.
 """.strip()
 
-# ⚠️ Opcional (curto)
 FULL_NSFW_HOOK = """
 [NSFW_HOOK_EXTRA]
-- Linguagem adulta direta, com **NSFW LIBERADO**.
+- Linguagem adulta direta **NSFW totalmente liberado**.
 - A cena deve PROGREDIR, mas manter espaço para continuar no próximo turno.
-- Clímax só ocorre se o usuário pedir/confirmar; caso contrário, "pausa no ápice" + gancho.
-- Termine sua resposta deixando 1 gancho (ação em andamento / convite / pergunta curta).
+- Se o usuário não pedir conclusão, pare com ação em andamento / clima sustentado (sem encerramento).
 """.strip()
 
 
@@ -98,24 +97,6 @@ def nsfw_enabled(usuario_key: str) -> bool:
         pass
 
     return True
-
-def _flatten_facts(root: Any, prefix: str = "") -> Dict[str, Any]:
-    """
-    Converte dict aninhado em dict plano com chaves pontilhadas.
-    Ex: {"mary":{"evento":{"x":1}}} -> {"mary.evento.x": 1}
-    """
-    out: Dict[str, Any] = {}
-    if isinstance(root, dict):
-        for k, v in root.items():
-            if not isinstance(k, str):
-                continue
-            p = f"{prefix}.{k}" if prefix else k
-            if isinstance(v, dict):
-                out.update(_flatten_facts(v, p))
-            else:
-                out[p] = v
-    return out
-
 
 
 # ==========================================================
@@ -288,12 +269,9 @@ def _llm_summarize(model_id: str, text: str) -> str:
 # ENTIDADES / EVENTOS
 # ==========================================================
 def _entities_to_line(f: Dict[str, Any]) -> str:
-    flat = _flatten_facts(f or {})
     ents = []
-    for k, v in flat.items():
-        if not v:
-            continue
-        if k.startswith("mary.ent."):
+    for k, v in (f or {}).items():
+        if isinstance(k, str) and k.startswith("mary.ent.") and v:
             label = k.replace("mary.ent.", "", 1)
             vs = str(v).strip()
             if vs:
@@ -301,13 +279,13 @@ def _entities_to_line(f: Dict[str, Any]) -> str:
     return "; ".join(sorted(ents)) if ents else "—"
 
 
-
 def _collect_mary_events_from_facts(facts: Dict[str, Any]) -> Dict[str, str]:
-    flat = _flatten_facts(facts or {})
     eventos: Dict[str, str] = {}
+    if not isinstance(facts, dict):
+        return eventos
 
-    for k, v in flat.items():
-        if not v:
+    for k, v in facts.items():
+        if not isinstance(k, str) or not v:
             continue
         if k.startswith("mary.evento."):
             label = k.replace("mary.evento.", "", 1)
@@ -317,6 +295,7 @@ def _collect_mary_events_from_facts(facts: Dict[str, Any]) -> Dict[str, str]:
             eventos[label] = str(v)
 
     return eventos
+
 
 def _detect_thematic_tags_from_prompt(prompt: str) -> List[str]:
     low = (prompt or "").lower()
@@ -374,48 +353,124 @@ def _get_lorebook(usuario_key: str, prompt: str, k: int = 4, max_chars: int = 90
 
 
 # ==========================================================
-# CONTINUIDADE (anti “finalizar em 1 turno”)
+# CONTINUIDADE (anti-finalização) — SEM TEXTO FIXO
 # ==========================================================
 def _user_requested_conclusion(prompt: str) -> bool:
     p = (prompt or "").lower()
-    # palavras que normalmente indicam “finaliza/agora conclui”
     keys = [
         "termina", "finaliza", "conclui", "acaba", "acabar",
-        "goza", "gozar", "chega lá", "chegar lá",
         "pode terminar", "pode finalizar", "agora sim termina",
+        # você pode expandir conforme seu vocabulário no app
     ]
     return any(k in p for k in keys)
 
 
-def _ensure_continuation_hook(texto: str, prompt: str) -> str:
+def _looks_like_conclusion(text: str) -> bool:
     """
-    Se o usuário NÃO pediu conclusão, força o final do texto a ficar “aberto”,
-    com gancho claro de continuidade (sem encerrar a cena).
+    Heurística simples: detecta semântica de encerramento/pós-cena.
+    Mantém genérico (não explícito).
+    """
+    t = (text or "").lower()
+    endings = [
+        "depois disso",
+        "mais tarde",
+        "no fim",
+        "quando tudo terminou",
+        "acabou",
+        "exaustos",
+        "satisfeitos",
+        "ficamos ali",
+        "adormecemos",
+        "finalmente terminou",
+        "e então terminou",
+    ]
+    tail = t[-700:] if len(t) > 700 else t
+    return any(e in tail for e in endings)
+
+
+# Micro-ganchos variáveis (sem “carimbo” e sem explícito)
+_CONTINUATION_MICRO = [
+    # ação suspensa
+    "paro no meio do gesto, mantendo o contato",
+    "fico ali por um instante, sustentando o ritmo sem fechar nada",
+    "respiro fundo e não apresso o desfecho",
+    "continuo bem perto, como se ainda estivesse no meio do caminho",
+    "seguro o clima no lugar, sem transformar isso em final",
+
+    # estado emocional/atmosfera
+    "a tensão continua viva entre nós",
+    "o clima não se desfaz — ainda está acontecendo",
+    "meu corpo ainda responde ao que a gente começou",
+    "o silêncio fica carregado, como se pedisse continuação",
+
+    # condução sutil
+    "deixando espaço para você conduzir o próximo passo",
+    "sem decidir por você onde isso termina",
+    "sem trocar intensidade por encerramento",
+]
+
+
+def _reopen_without_fixed_hook(texto: str) -> str:
+    """
+    Reabre sem frase padrão:
+    - remove fechamento óbvio, se existir
+    - termina com pontuação “aberta”
+    - acrescenta UMA micro-linha variável (não fixa) para manter continuidade
+    """
+    t = (texto or "").rstrip()
+    if not t:
+        return t
+
+    # remove trechos de fechamento explícito “pós-cena”
+    t = re.sub(
+        r"(depois disso|mais tarde|no fim|quando tudo terminou|finalmente).*",
+        "",
+        t,
+        flags=re.I | re.S,
+    ).rstrip()
+
+    # garante final “aberto”
+    if not t.endswith(("…", "—")):
+        # se termina com ponto muito final, troca por reticências
+        if t.endswith("."):
+            t = t[:-1] + "…"
+        else:
+            t += "…"
+
+    micro = random.choice(_CONTINUATION_MICRO)
+
+    # Evita duplicar se texto já contém algo muito parecido
+    tlow = t.lower()
+    if any(k in tlow for k in ["meio do caminho", "não apresso", "sem fechar", "continua viva", "ainda está acontecendo"]):
+        return t
+
+    return f"{t}\n\n{micro}."
+
+
+def _enforce_scene_flow(texto: str, prompt: str, usuario_key: str) -> str:
+    """
+    Regra:
+    - Se usuário NÃO pediu conclusão, não deixa a resposta cair em “pós-cena/encerramento”.
+    - Sem texto fixo: usa micro-variação.
     """
     t = (texto or "").strip()
     if not t:
         return t
 
     if _user_requested_conclusion(prompt):
-        return t  # usuário pediu, deixa concluir
-
-    # Se já termina com pergunta/gancho, não mexe.
-    if re.search(r"[\?\!]\s*$", t):
+        # usuário conduziu para finalizar -> não interfere
         return t
 
-    # Heurística: se o texto termina muito “fechado”, adiciona gancho.
-    # (sem policiar demais o conteúdo; apenas reabre cena)
-    hook = (
-        "\n\nEu fico bem perto de você, respirando devagar, "
-        "sem quebrar o clima — como se a gente estivesse no meio do caminho. "
-        "Me diz… você quer que eu continue assim, mais devagar, ou você toma a liderança agora?"
-    )
+    if _looks_like_conclusion(t):
+        return _reopen_without_fixed_hook(t)
 
-    # Evita duplicar se já existir frase parecida
-    if "me diz" in t.lower() and "continue" in t.lower():
-        return t
+    # Também reabre se termina “fechado” demais (ponto final e tom conclusivo)
+    if t.endswith(".") and len(t) > 180:
+        # heurística leve: não mexe se já termina com pergunta/exclamação/reticências
+        if not t.endswith(("?.", "!.", "…")):
+            return _reopen_without_fixed_hook(t)
 
-    return t + hook
+    return t
 
 
 # ==========================================================
@@ -473,9 +528,9 @@ FOCO_SENSORIAL_DESTE_TURNO:
 {lore}
 
 CONTINUIDADE_DE_CENA (OBRIGATÓRIO):
-- NÃO conclua atos íntimos automaticamente.
-- Se o usuário não pedir “terminar/finalizar”, sua resposta deve PARAR com a cena EM ANDAMENTO.
-- Termine SEMPRE deixando um GANCHO claro para o próximo turno (pergunta curta OU ação em suspensão).
+- NÃO conclua automaticamente.
+- Se o usuário não pedir para finalizar, evite “pós-cena/encerramento”.
+- Mantenha a cena em andamento, com naturalidade (sem frases padrão repetidas).
 
 {nsfw_block}
 
@@ -682,29 +737,12 @@ class MaryService(BaseCharacter):
         # =========================
         # COMANDOS DO APP (RESET)
         # =========================
-        if plow == "/reset total":
-    f_all = cached_get_facts(usuario_key) or {}
-    flat = _flatten_facts(f_all)
-
-    # apaga eventos/entidades de verdade (remove a chave)
-    for k in list(flat.keys()):
-        if k.startswith(("mary.evento.", "mary.eventos.", "mary.ent.")):
-            try:
-                delete_fact(usuario_key, k)   # ✅ remove a chave, não seta ""
-            except Exception:
-                pass
-
-    # zera resumo rolante
-    try:
-        delete_fact(usuario_key, "mary.rs.v2")
-    except Exception:
-        set_fact(usuario_key, "mary.rs.v2", "", {"fonte": "cmd_reset_total"})
-
-    set_fact(usuario_key, "mary.rs.v2.ts", time.time(), {"fonte": "cmd_reset_total"})
-    set_fact(usuario_key, "mary.reset.total.ts", time.time(), {"fonte": "cmd_reset_total"})
-    clear_user_cache(usuario_key)
-    return "⚠️ RESET TOTAL aplicado: eventos/entidades foram REMOVIDOS e o resumo rolante foi zerado."
-
+        if plow == "/reset historico":
+            set_fact(usuario_key, "mary.rs.v2", "", {"fonte": "cmd"})
+            set_fact(usuario_key, "mary.rs.v2.ts", time.time(), {"fonte": "cmd"})
+            set_fact(usuario_key, "mary.reset.historico.ts", time.time(), {"fonte": "cmd"})
+            clear_user_cache(usuario_key)
+            return "✅ Reset de sessão aplicado: resumo rolante limpo. Vamos seguir daqui com leveza e continuidade."
 
         if plow == "/reset total":
             f_all = cached_get_facts(usuario_key) or {}
@@ -744,6 +782,7 @@ class MaryService(BaseCharacter):
         tags = _detect_thematic_tags_from_prompt(prompt)
         thematic_block = _get_thematic_memories_for_tags(usuario_key, tags)
 
+        # foco sensorial rotativo (leve)
         foco_pool = ["cabelo", "olhos", "lábios/boca", "mãos/toque", "respiração", "perfume", "pele/temperatura", "voz/timbre", "sorriso"]
         idx = int(st.session_state.get("mary_attr_idx", -1))
         idx = (idx + 1) % len(foco_pool)
@@ -755,12 +794,14 @@ class MaryService(BaseCharacter):
         docs = cached_get_history(usuario_key) or []
         evidence = self._compact_user_evidence(docs, max_chars=320)
 
+        # eventos fixos (capado)
         eventos_dict = _collect_mary_events_from_facts(f_all)
         events_block = ""
         if eventos_dict:
             linhas = [f"- {label}: {str(val).strip()}" for label, val in sorted(eventos_dict.items()) if str(val).strip()]
             events_block = "\n".join(linhas)[:1200]
 
+        # lorebook (capado)
         lore_block = _get_lorebook(usuario_key, prompt, k=4, max_chars=900)
 
         system_block = _build_system_block(
@@ -851,15 +892,16 @@ class MaryService(BaseCharacter):
             if iteration >= max_iter:
                 break
 
-        # ✅ força gancho de continuidade quando usuário não pediu “conclusão”
-        texto = _ensure_continuation_hook(texto, prompt)
+        # ✅ anti-finalização / reabertura (SEM TEXTO FIXO)
+        texto = _enforce_scene_flow(texto, prompt, usuario_key)
 
+        # Ultra IA opcional
         if st.session_state.get("ultra_ia_on", False) and texto:
             try:
                 notes = critic_review(model, system_block, prompt, texto)
                 texto = polish(model, system_block, prompt, texto, notes)
-                # reforça de novo após polish (polish às vezes “fecha” a cena)
-                texto = _ensure_continuation_hook(texto, prompt)
+                # ✅ reforça novamente pós-polish
+                texto = _enforce_scene_flow(texto, prompt, usuario_key)
             except Exception as e:
                 _log_error("ultra_ia", e)
 
