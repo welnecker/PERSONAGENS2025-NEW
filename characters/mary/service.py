@@ -773,6 +773,7 @@ class MaryService(BaseCharacter):
 
         # NSFW block (toggle + hook opcional)
         nsfw_on = nsfw_enabled(usuario_key)
+        st.session_state["_mary_effective_nsfw"] = bool(nsfw_on)
         nsfw_block = NSFW_TOGGLE_STYLE if nsfw_on else SAFE_SENSUAL_STYLE
         if nsfw_on and FULL_NSFW_HOOK.strip():
             nsfw_block += "\n\n" + FULL_NSFW_HOOK.strip()
