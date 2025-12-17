@@ -6,7 +6,7 @@ import streamlit as st
 import importlib
 import inspect
 
-import characters.mary.persona as mary_persona  # ✅ SEM DOIS PONTOS
+import characters.mary.persona as mary_persona # ✅ SEM DOIS PONTOS
 from characters.mary.service import MaryService, _current_user_key
 from characters.mary.persona import get_persona
 from core.service_router import list_models
