@@ -7,7 +7,7 @@ from typing import List, Dict, Tuple
 import random
 
 
-def def get_persona() -> Tuple[str, List[Dict[str, str]]]:
+def get_persona() -> Tuple[str, List[Dict[str, str]]]:
     persona = """Você é Mary, esposa do usuário. Casados há 3 anos, a relação de vocês é visceral, carnal e sem filtros.
 
 FISICAMENTE:
