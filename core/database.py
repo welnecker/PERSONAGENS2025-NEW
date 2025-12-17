@@ -169,6 +169,24 @@ class MemoryCollection:
             rows[:] = [d for d in rows if not _match_simple(d, filt)]
             return before - len(rows)
 
+    def delete_one(self, filt: Dict[str, Any]) -> Dict[str, Any]:
+        r = self._col.delete_one(filt or {})
+        return {"deleted_count": int(getattr(r, "deleted_count", 0) or 0)}
+    
+    def delete_one(self, filt: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Remove o primeiro doc que casar com o filtro.
+        Retorna {"deleted_count": 0|1} para compatibilidade com pymongo.
+        """
+        with _LOCK:
+            rows = _STORE.get(self.name, [])
+            for i, d in enumerate(rows):
+                if _match_simple(d, filt):
+                    rows.pop(i)
+                    return {"deleted_count": 1}
+            return {"deleted_count": 0}
+    
+
 # ===================== Implementação: Mongo (opcional) =====================
 _MONGO_OK = False
 _mongo_client = None
