@@ -15,6 +15,7 @@ import logging
 import random
 import re
 import time
+import hashlib
 from typing import Any, Dict, List, Tuple
 
 import streamlit as st
@@ -42,7 +43,7 @@ _SERVICE_CACHE.clear()
 
 
 # ==========================================================
-# NSFW TOGGLE (CURTO, ESTÁVEL)
+# NSFW TOGGLE (CURTO, ESTÁVEL)  ✅ (sem duplicação)
 # ==========================================================
 SAFE_SENSUAL_STYLE = """
 [NSFW_OFF]
@@ -58,13 +59,6 @@ Estilo: adulto liberado (direto), com intensidade emocional e progressão clara 
 - A cena PROGRIDE a cada turno, mas NÃO deve concluir automaticamente.
 - Só conclua (clímax/pós-cena) se o usuário conduzir explicitamente para conclusão.
 - Evite repetição mecânica de frases/manias.
-""".strip()
-
-FULL_NSFW_HOOK = """
-[NSFW_HOOK_EXTRA]
-- Linguagem adulta direta **NSFW totalmente liberado**.
-- A cena deve PROGREDIR, mas manter espaço para continuar no próximo turno.
-- Se o usuário não pedir conclusão, pare com ação em andamento / clima sustentado (sem encerramento).
 """.strip()
 
 
@@ -360,19 +354,12 @@ def _user_requested_conclusion(prompt: str) -> bool:
     keys = [
         "termina", "finaliza", "conclui", "acaba", "acabar",
         "pode terminar", "pode finalizar", "agora sim termina",
-        # você pode expandir conforme seu vocabulário no app
     ]
     return any(k in p for k in keys)
 
 
-import random
-import hashlib
-import re
-
 def _looks_like_conclusion(text: str) -> bool:
     t = (text or "").lower()
-
-    # sinais comuns de “fechou a cena” (pós-ato, descanso, encerramento completo)
     patterns = [
         r"\bdepois\b.*\bfica(mos)?\b",
         r"\bacab(ou|a|amos)\b",
@@ -386,32 +373,28 @@ def _looks_like_conclusion(text: str) -> bool:
     ]
     return any(re.search(p, t) for p in patterns)
 
+
 def _already_open_ended(text: str) -> bool:
     t = (text or "").strip()
     if not t:
         return True
-    # pergunta / reticências / travessão / frase interrompida
     return bool(re.search(r"(\?|\.\.\.|—)\s*$", t))
 
+
 def _pick_hook(prompt: str, last_text: str) -> str:
-    # varia de forma estável para não repetir (hash do contexto)
     seed_src = (prompt or "") + "||" + (last_text[-80:] if last_text else "")
     seed = int(hashlib.md5(seed_src.encode("utf-8")).hexdigest()[:8], 16)
     rng = random.Random(seed)
 
     hooks = [
-        # 1) ação em andamento (sem pergunta padrão)
         "\n\nEu não paro — só diminuo um instante, ainda perto demais, como se estivesse esperando você conduzir o próximo passo…",
-        # 2) convite curto e natural
         "\n\nEu mordo o lábio, sentindo o corpo responder, e deixo isso no ar — do jeito que você gosta…",
-        # 3) pausa no ápice (sem “olha nos olhos”)
         "\n\nEu prendo a respiração por um segundo, na beira, e não passo dali sem você…",
-        # 4) continuidade com gesto (sem frase fixa)
         "\n\nEu encosto em você de novo, devagar, como se estivesse recomeçando a mesma onda — sem pressa de acabar…",
-        # 5) gancho sem romantização robótica
         "\n\nEu fico no meio do caminho, quente e presente, deixando o próximo movimento depender do que você fizer agora…",
     ]
     return rng.choice(hooks)
+
 
 def _ensure_continuation_hook(texto: str, prompt: str) -> str:
     t = (texto or "").strip()
@@ -421,16 +404,21 @@ def _ensure_continuation_hook(texto: str, prompt: str) -> str:
     if _user_requested_conclusion(prompt):
         return t
 
-    # se já está aberto, não mexe
     if _already_open_ended(t):
         return t
 
-    # se parece que encerrou, reabre com gancho variável
     if _looks_like_conclusion(t):
         return t + _pick_hook(prompt, t)
 
-    # caso não pareça conclusão, não força nada
     return t
+
+
+# ✅ ESTA FUNÇÃO NÃO EXISTIA NO SEU ARQUIVO (era o bug principal)
+def _enforce_scene_flow(texto: str, prompt: str, usuario_key: str) -> str:
+    """Camada final obrigatória de continuidade (sem texto fixo)."""
+    if not texto:
+        return texto
+    return _ensure_continuation_hook(texto, prompt)
 
 
 # ==========================================================
@@ -516,7 +504,7 @@ def _mem_drop_warn(report: Dict[str, Any]) -> None:
 
 
 # ==========================================================
-# ROBUST CALL (menos spam / menos travas)
+# ROBUST CALL
 # ==========================================================
 def _robust_chat_call(
     model: str,
@@ -731,19 +719,16 @@ class MaryService(BaseCharacter):
         prefs = _read_prefs(f_all)
         local_atual = get_fact(usuario_key, "local_cena_atual", "") or ""
 
-        # NSFW block (toggle + hook opcional)
+        # ✅ NSFW block SEM duplicação
         nsfw_on = nsfw_enabled(usuario_key)
         st.session_state["_mary_effective_nsfw"] = bool(nsfw_on)
         nsfw_block = NSFW_TOGGLE_STYLE if nsfw_on else SAFE_SENSUAL_STYLE
-        if nsfw_on and FULL_NSFW_HOOK.strip():
-            nsfw_block += "\n\n" + FULL_NSFW_HOOK.strip()
 
         memoria_pin = self._build_memory_pin(usuario_key, user)
 
         tags = _detect_thematic_tags_from_prompt(prompt)
         thematic_block = _get_thematic_memories_for_tags(usuario_key, tags)
 
-        # foco sensorial rotativo (leve)
         foco_pool = ["cabelo", "olhos", "lábios/boca", "mãos/toque", "respiração", "perfume", "pele/temperatura", "voz/timbre", "sorriso"]
         idx = int(st.session_state.get("mary_attr_idx", -1))
         idx = (idx + 1) % len(foco_pool)
@@ -755,14 +740,12 @@ class MaryService(BaseCharacter):
         docs = cached_get_history(usuario_key) or []
         evidence = self._compact_user_evidence(docs, max_chars=320)
 
-        # eventos fixos (capado)
         eventos_dict = _collect_mary_events_from_facts(f_all)
         events_block = ""
         if eventos_dict:
             linhas = [f"- {label}: {str(val).strip()}" for label, val in sorted(eventos_dict.items()) if str(val).strip()]
             events_block = "\n".join(linhas)[:1200]
 
-        # lorebook (capado)
         lore_block = _get_lorebook(usuario_key, prompt, k=4, max_chars=900)
 
         system_block = _build_system_block(
@@ -853,15 +836,19 @@ class MaryService(BaseCharacter):
             if iteration >= max_iter:
                 break
 
-        # ✅ anti-finalização / reabertura (SEM TEXTO FIXO)
+        # ✅ anti-finalização / reabertura
         texto = _enforce_scene_flow(texto, prompt, usuario_key)
 
-        # Ultra IA opcional
+        # Ultra IA opcional (✅ com trava anti-conclusão)
         if st.session_state.get("ultra_ia_on", False) and texto:
             try:
-                notes = critic_review(model, system_block, prompt, texto)
+                notes = critic_review(
+                    model,
+                    system_block + "\n\nREGRA EXTRA: não conclua cenas íntimas automaticamente; mantenha continuidade aberta.",
+                    prompt,
+                    texto,
+                )
                 texto = polish(model, system_block, prompt, texto, notes)
-                # ✅ reforça novamente pós-polish
                 texto = _enforce_scene_flow(texto, prompt, usuario_key)
             except Exception as e:
                 _log_error("ultra_ia", e)
@@ -961,9 +948,12 @@ class MaryService(BaseCharacter):
     def _montar_historico(self, usuario_key: str, history_boot: List[Dict[str, str]], model: str, verbatim_ultimos: int = 30) -> List[Dict[str, str]]:
         hist_budget, _, _ = _budget_slices(model)
         docs = cached_get_history(usuario_key)
+
+        # ✅ NÃO força "persona boot" se backend falhou ou está vazio.
+        # Boot só deve existir para “primeiro contato”, e mesmo assim mínimo.
         if not docs:
             st.session_state["_mem_drop_report"] = {}
-            return history_boot[:]
+            return history_boot[:] if history_boot else []
 
         pares: List[Dict[str, str]] = []
         for d in docs:
@@ -1006,7 +996,7 @@ class MaryService(BaseCharacter):
             "hist_tokens": _hist_tokens(msgs),
             "hist_budget": hist_budget,
         }
-        return msgs if msgs else history_boot[:]
+        return msgs if msgs else (history_boot[:] if history_boot else [])
 
     def _update_rolling_summary_v2(self, usuario_key: str, model: str, last_user: str, last_assistant: str) -> None:
         f = cached_get_facts(usuario_key) or {}
