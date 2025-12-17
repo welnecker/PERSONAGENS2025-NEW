@@ -10,7 +10,7 @@ st.set_page_config(
 
 # ==== BLOQUEIO POR SENHA PARA O MARY_APP ====
 
-SENHA_CORRETA = "141267"   # ← coloque aqui a senha que quiser
+SENHA_CORRETA = "311071"   # ← coloque aqui a senha que quiser
 
 def check_password():
     """Exibe um campo de senha e barra acesso se estiver incorreto."""
