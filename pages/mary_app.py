@@ -9,11 +9,11 @@ from core.service_router import list_models
 from core.repositories import (
     save_interaction,
     get_history_docs,
-    get_history_docs_multi, 
+    get_history_docs_multi,
     get_facts,
     set_fact,
-    delete_last_interaction,   # ✅ IMPORTANTE
-    delete_user_history,       # ✅ usado no botão de apagar histórico do BD
+    delete_last_interaction,
+    delete_user_history,
 )
 
 # ✅ PRIMEIRA CHAMADA
@@ -79,6 +79,27 @@ def _sync_nsfw_to_backend() -> None:
     except Exception as e:
         st.error(f"Falha ao salvar NSFW no backend: {e}")
 
+def _keys_para_mary() -> list[str]:
+    """✅ Chave nova + chave legada (para não perder histórico antigo)."""
+    usuario_key = _current_user_key()  # ex: "Janio::mary"
+    usuario_legado = str(st.session_state.get("user_id") or "").strip()  # ex: "Janio"
+    keys = [usuario_key]
+    if usuario_legado and usuario_legado != usuario_key:
+        keys.append(usuario_legado)
+    return keys
+
+def _on_user_change() -> None:
+    """
+    ✅ Trocar user_id precisa:
+    - limpar chat visual
+    - invalidar cache
+    - resetar intro_done
+    - recarregar do backend no próximo ciclo
+    """
+    st.session_state["chat_history"] = []
+    st.session_state["mary_intro_done"] = False
+    _invalidate_backend_cache()
+
 def _garantir_estado_inicial() -> None:
     if "user_id" not in st.session_state or not st.session_state["user_id"]:
         st.session_state["user_id"] = "Janio"
@@ -117,6 +138,18 @@ def _garantir_estado_inicial() -> None:
     if "backend_hist_cache_ts" not in st.session_state:
         st.session_state["backend_hist_cache_ts"] = 0.0
 
+def _tem_historico_no_backend(keys: list[str]) -> bool:
+    """✅ Checa novo+legado (evita duplicar fala inicial)."""
+    try:
+        docs = get_history_docs_multi(keys, limit=1) or []
+        return bool(docs)
+    except Exception:
+        # fallback (melhor que nada)
+        try:
+            return bool(get_history_docs(keys[0], limit=1) or [])
+        except Exception:
+            return False
+
 def _gerar_fala_inicial_e_salvar_backend() -> str:
     try:
         _, history_boot = get_persona()
@@ -136,12 +169,11 @@ def _gerar_fala_inicial_e_salvar_backend() -> str:
             "\"Então… vamos continuar de onde a gente parou, amor?\""
         )
 
-    # ✅ Evita duplicar infinitamente: só salva se ainda não tem histórico algum
+    # ✅ Evita duplicar: só salva se NÃO houver histórico nem novo nem legado
     try:
-        usuario_key = _current_user_key()
-        docs = get_history_docs(usuario_key, limit=1) or []
-        if not docs:
-            save_interaction(usuario_key, "[FALA_INICIAL_MARY]", intro, "mary-persona-static")
+        keys = _keys_para_mary()
+        if not _tem_historico_no_backend(keys):
+            save_interaction(keys[0], "[FALA_INICIAL_MARY]", intro, "mary-persona-static")
     except Exception:
         pass
 
@@ -161,19 +193,26 @@ def _carregar_chat_visual_do_backend(force: bool = False) -> list[tuple[str, str
         if cached is not None and (now - ts) < 2.0:
             return cached
 
-    # ✅ chave nova e chave legada
-    usuario_key = _current_user_key()  # ex: "Janio::mary"
-    usuario_legado = str(st.session_state.get("user_id") or "").strip()  # ex: "Janio"
+    keys = _keys_para_mary()
 
     try:
-        # ✅ tenta trazer histórico tanto do formato novo quanto do legado
-        keys = [usuario_key]
-        if usuario_legado and usuario_legado != usuario_key:
-            keys.append(usuario_legado)
-
         docs = get_history_docs_multi(keys, limit=400) or []
     except Exception:
         docs = []
+
+    # ✅ Se tiver timestamp no doc, ordena (evita “mistura”)
+    def _ts(d: dict) -> float:
+        for k in ("ts", "timestamp", "created_at", "time"):
+            v = d.get(k)
+            try:
+                if isinstance(v, (int, float)):
+                    return float(v)
+            except Exception:
+                pass
+        return 0.0
+
+    if docs and isinstance(docs[0], dict) and any(k in docs[0] for k in ("ts", "timestamp", "created_at", "time")):
+        docs = sorted(docs, key=_ts)
 
     hist: list[tuple[str, str]] = []
     for d in docs:
@@ -191,11 +230,9 @@ def _carregar_chat_visual_do_backend(force: bool = False) -> list[tuple[str, str
 def _apagar_ultimo_turno_backend_e_sync() -> None:
     """
     ✅ Apaga DO BANCO e sincroniza a tela.
-    Isso resolve definitivamente o seu problema de “apaga na tela mas volta”.
     """
     usuario_key = _current_user_key()
 
-    ok = False
     try:
         ok = delete_last_interaction(usuario_key)
     except Exception as e:
@@ -204,14 +241,12 @@ def _apagar_ultimo_turno_backend_e_sync() -> None:
 
     _invalidate_backend_cache()
 
-    # sempre reconstrói do backend após deletar
     backend_hist = _carregar_chat_visual_do_backend(force=True)
 
     if backend_hist:
         st.session_state["chat_history"] = backend_hist
         st.session_state["mary_intro_done"] = True
     else:
-        # se ficou vazio, volta a intro
         st.session_state["chat_history"] = []
         st.session_state["mary_intro_done"] = False
         _colar_fala_inicial_na_tela()
@@ -233,6 +268,25 @@ def _list_eventos_mary(facts: dict) -> list[tuple[str, str]]:
     eventos.sort(key=lambda x: x[0])
     return eventos
 
+def _apagar_hist_bd_novo_e_legado() -> int:
+    """
+    ✅ Apaga histórico do BD para a chave nova e para a chave legada (se existir).
+    """
+    keys = _keys_para_mary()
+    total = 0
+    # apaga a chave nova
+    try:
+        total += int(delete_user_history(keys[0]) or 0)
+    except Exception:
+        pass
+    # apaga legado se for diferente
+    if len(keys) > 1:
+        try:
+            total += int(delete_user_history(keys[1]) or 0)
+        except Exception:
+            pass
+    return total
+
 # ==========================================================
 # APP
 # ==========================================================
@@ -246,9 +300,9 @@ def main() -> None:
     with st.sidebar:
         st.header("Mary – Controles")
 
-        st.text_input("👤 Usuário", key="user_id")
+        # ✅ on_change para trocar user sem misturar cache/histórico
+        st.text_input("👤 Usuário", key="user_id", on_change=_on_user_change)
         st.caption(f"🔑 usuario_key atual: { _current_user_key() }")
-
 
         try:
             all_models = list_models() or []
@@ -266,7 +320,6 @@ def main() -> None:
 
         st.markdown("---")
 
-        # ✅ NSFW com persistência no BD
         st.checkbox(
             "Modo adulto liberado (NSFW)",
             key="mary_nsfw_on",
@@ -280,8 +333,10 @@ def main() -> None:
         col1, col2 = st.columns(2)
         with col1:
             if st.button("Recarregar persona", use_container_width=True):
-                _colar_fala_inicial_na_tela()
+                # ✅ recarrega só visual (não regrava se já há histórico)
                 _invalidate_backend_cache()
+                st.session_state["chat_history"] = []
+                st.session_state["mary_intro_done"] = False
                 st.rerun()
 
         with col2:
@@ -362,7 +417,7 @@ def main() -> None:
                 st.error("Marque a confirmação primeiro.")
             else:
                 try:
-                    n = delete_user_history(usuario_key)
+                    n = _apagar_hist_bd_novo_e_legado()
                     _invalidate_backend_cache()
                     st.session_state["chat_history"] = []
                     st.session_state["mary_intro_done"] = False
