@@ -72,9 +72,12 @@ def get_fact(usuario: str, key: str, default: Any = None) -> Any:
     return cur
 
 
+from datetime import datetime
+
 def set_fact(usuario: str, key: str, value: Any, meta: Optional[Dict[str, Any]] = None) -> None:
     """
-    Seta um fact (suporta chave pontilhada no storage, pois vira 'fatos.<key>').
+    Seta um fact (chave pontilhada vira 'fatos.<key>').
+    Meta: guarda por chave em 'meta.<key>' e atualiza meta.updated_at.
     """
     meta = meta or {}
     _state().update_one(
@@ -82,7 +85,8 @@ def set_fact(usuario: str, key: str, value: Any, meta: Optional[Dict[str, Any]] 
         {"$set": {
             "usuario": usuario,
             f"fatos.{key}": value,
-            "meta": meta
+            f"meta.{key}": meta,
+            "meta.updated_at": datetime.utcnow(),
         }},
         upsert=True
     )
@@ -121,8 +125,8 @@ def save_interaction(usuario: str, mensagem_usuario: str, resposta_mary: str, mo
 
 def get_history_docs(usuario: str, limit: int = 400) -> List[Dict[str, Any]]:
     """
-    Histórico por uma única chave de usuário/personagem.
     Ordena por ts asc; fallback _id asc.
+    Robustez: docs legados sem ts continuam ordenando por _id.
     """
     cur = (
         _hist()
@@ -133,20 +137,44 @@ def get_history_docs(usuario: str, limit: int = 400) -> List[Dict[str, Any]]:
     return list(cur)
 
 
-def get_history_docs_multi(users_or_keys: List[str], limit: int = 400) -> List[Dict[str, Any]]:
+def get_history_docs_multi(
+    users_or_keys: List[str],
+    limit: int = 400,
+    limit_per_key: int = 400,
+) -> List[Dict[str, Any]]:
     """
-    Histórico unificado para várias chaves (ex.: ["Janio::laura", "Janio"]).
+    Histórico unificado para várias chaves (ex.: ["Janio::mary", "Janio"]).
+
+    - Busca por key separadamente (evita que uma key "roube" todo o limit).
+    - Faz merge + sort por ts asc (fallback _id asc).
+    - Retorna no máximo `limit` docs finais.
     """
     keys = [k for k in (users_or_keys or []) if k]
     if not keys:
         return []
-    cur = (
-        _hist()
-        .find({"usuario": {"$in": keys}})
-        .sort([("ts", 1), ("_id", 1)])
-        .limit(limit)
-    )
-    return list(cur)
+
+    all_docs: List[Dict[str, Any]] = []
+    for k in keys:
+        cur = (
+            _hist()
+            .find({"usuario": k})
+            .sort([("ts", 1), ("_id", 1)])
+            .limit(limit_per_key)
+        )
+        all_docs.extend(list(cur))
+
+    def _sort_key(d: Dict[str, Any]):
+        ts = d.get("ts")
+        # ts ideal é datetime; legado pode não ter ts
+        if not isinstance(ts, datetime):
+            ts = datetime.min
+        return (ts, d.get("_id"))
+
+    all_docs.sort(key=_sort_key)
+
+    if limit and len(all_docs) > limit:
+        return all_docs[-limit:]
+    return all_docs
 
 
 def delete_user_history(usuario: str) -> int:
@@ -159,10 +187,8 @@ def delete_last_interaction(usuario: str) -> bool:
     Remove o último turno (maior ts; fallback _id).
     Robusto para docs legados sem 'ts'.
     """
-    # 1) tenta por ts
     last = _hist().find_one({"usuario": usuario}, sort=[("ts", -1), ("_id", -1)])
     if not last:
-        # 2) fallback: pode haver docs antigos sem 'ts'
         last = _hist().find_one({"usuario": usuario}, sort=[("_id", -1)])
 
     if not last:
