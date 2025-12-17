@@ -28,7 +28,7 @@ st.set_page_config(
     layout="centered",
 )
 
-SENHA_CORRETA = "141267"
+SENHA_CORRETA = "311071"
 DEFAULT_VISUAL_LIMIT = 80
 
 
