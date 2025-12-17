@@ -24,7 +24,7 @@ from core.repositories import (
 # ==========================================================
 st.set_page_config(
     page_title="Mary – Esposa Cúmplice",
-    page_icon="💍",
+    page_icon="💍💍",
     layout="centered",
 )
 
