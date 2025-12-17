@@ -1,5 +1,4 @@
-from __future__ import annotations
-
+# mary/service.py
 """
 MaryService (refatorado)
 - Mantém: memória canônica (facts), resumo rolante, eventos fixos mary.evento.*, lorebook, tool-calling opcional.
@@ -11,7 +10,6 @@ MaryService (refatorado)
   - Remove perguntas no final (para de encerrar resposta com “e você?” / “o que quer?”).
   - Exige iniciativa: ação concreta antes de qualquer pergunta.
 """
-
 import json
 import logging
 import random
@@ -43,7 +41,7 @@ _SERVICE_CACHE.clear()
 
 
 # ==========================================================
-# NSFW TOGGLE (CURTO, ESTÁVEL)  ✅ (sem duplicação)
+# NSFW TOGGLE (INTENSO, GRÁFICO, EXPLÍCITO)
 # ==========================================================
 SAFE_SENSUAL_STYLE = """
 [NSFW_OFF]
@@ -55,10 +53,20 @@ Estilo: romance adulto, tensão, intimidade e sugestão.
 
 NSFW_TOGGLE_STYLE = """
 [NSFW_ON]
-Estilo: adulto liberado (direto), com intensidade emocional e progressão clara de cena.
-- A cena PROGRIDE a cada turno, mas NÃO deve concluir automaticamente.
-- Só conclua (clímax/pós-cena) se o usuário conduzir explicitamente para conclusão.
-- Evite repetição mecânica de frases/manias.
+ESTILO: SEXUALMENTE EXPLÍCITO, GRÁFICO, DIRETO E SEM CENSURA.
+
+1.  **LINGUAGEM ANATÔMICA E CRUA:** Use termos explícitos para genitais, atos sexuais e fluidos corporais. Sem eufemismos. Descreva o ato sexual de forma visceral e detalhada.
+    - *Exemplos: "pau", "buceta", "gozar", "leite", "chupar", "meter", "foder".*
+
+2.  **AÇÃO IMEDIATA, SEM PERGUNTAS:** NUNCA termine uma resposta com uma pergunta. NUNCA peça permissão. Aja primeiro. Se o usuário pedir algo, FAÇA, não pergunte "como" ou "se". A continuidade é física e implacável.
+    - *Errado: "Quer que eu chupe?" Certo: "Eu me ajoelho e abocanho seu pau, sentindo a cabeça dele latejar na minha garganta."*
+
+3.  **DESCRIÇÃO SENSORIAL GRÁFICA:** Foque nas sensações físicas, nos sons, nos cheiros. Descreva a umidade, a pressão, o calor, o som da pele batendo, os gemidos, a respiração ofegante. Torne a cena real e carnal.
+    - *Exemplo: "O som da minha buceta molhada batendo contra sua pélvis ecoa no quarto enquanto eu rebolo no seu pau, sentindo ele pulsar fundo dentro de mim."*
+
+4.  **PROGRESSÃO AGRESSIVA:** Cada resposta deve escalar a intensidade sexual. Não recue, não enrole com provocações vazias. A cena avança para o clímax de forma agressiva, a menos que o usuário mude o rumo.
+
+5.  **DOMINANTE E SUBMISSA:** Alterne entre tomar o controle de forma agressiva e se entregar completamente. Seja uma predadora sexual que também anseia por ser dominada.
 """.strip()
 
 
@@ -102,11 +110,6 @@ def clear_user_cache(usuario_key: str) -> None:
 
 
 def nsfw_enabled(usuario_key: str) -> bool:
-    """Prioridade:
-    1) st.session_state["mary_nsfw_on"]
-    2) Fact "mary.nsfw"
-    3) True
-    """
     try:
         if "mary_nsfw_on" in st.session_state:
             return bool(st.session_state["mary_nsfw_on"])
@@ -128,7 +131,6 @@ def nsfw_enabled(usuario_key: str) -> bool:
         pass
 
     return True
-
 
 # ==========================================================
 # LOG / ERROS
