@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import time
 import streamlit as st
-
+import importlib
+import inspect
+import characters.mary.persona as mary_persona
 from characters.mary.service import MaryService, _current_user_key
 from characters.mary.persona import get_persona
 from core.service_router import list_models
@@ -145,8 +147,10 @@ def _gerar_fala_inicial_e_salvar_backend() -> str:
     # salva intro só se NÃO houver histórico
     try:
         keys = _keys_para_mary()
-        if not _tem_historico_no_backend(keys):
+        # SEMPRE gera fala inicial nova quando mary_intro_done é False
+        if not st.session_state.get("mary_intro_done", False):
             save_interaction(keys[0], "[FALA_INICIAL_MARY]", intro, "mary-persona-static")
+
     except Exception:
         pass
 
@@ -329,6 +333,22 @@ def main() -> None:
         st.subheader("Limpar tela")
         if st.button("Limpar tela (visual)"):
             st.session_state["chat_history"] = []
+            st.rerun()
+
+        st.markdown("---")
+        st.subheader("🎭 Persona")
+        
+        st.caption("Arquivo ativo:")
+        st.code(inspect.getfile(mary_persona.get_persona))
+        
+        if st.button("♻️ Recarregar persona AGORA"):
+            importlib.reload(mary_persona)
+            st.session_state.pop("_mary_service", None)
+            st.session_state["mary_intro_done"] = False
+            st.session_state["chat_history"] = []
+            st.session_state["backend_hist_cache"] = None
+            st.session_state["backend_hist_cache_ts"] = 0.0
+            st.success("Persona recarregada. Fala inicial será regenerada.")
             st.rerun()
 
     # ===== BOOT =====
