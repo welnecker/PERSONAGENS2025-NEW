@@ -248,7 +248,7 @@ def main() -> None:
     backend, detail = db_status()
     st.caption(f"🗄️ Backend atual: **{backend}** ({detail})")
 
-    st.title("Mary – Esposa Cúmplice 💍")
+    st.title("Mary – Esposa Cúmplice 💍💍")
 
     # ====== BOTÕES DE BACKEND (NA TELA, NÃO NA SIDEBAR) ======
     keys = _keys_para_mary()
