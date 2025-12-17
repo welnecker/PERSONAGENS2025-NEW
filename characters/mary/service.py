@@ -5,9 +5,11 @@ MaryService (refatorado)
 - Mantém: memória canônica (facts), resumo rolante, eventos fixos mary.evento.*, lorebook, tool-calling opcional.
 - Ajusta: NSFW como toggle + bloco curto e estável (sem “cartilha” gigante no system).
 - Corrige: riscos de travamento (loops, warnings em excesso), e implementa /reset historico e /reset total.
-- NOVO (CORRETO): trava anti-finalização + reabertura SEM texto fixo (micro-gancho variável, sem carimbo repetitivo).
-
-Importante: este arquivo NÃO inclui texto sexual gráfico.
+- NOVO (CORRETO):
+  - Continuidade REAL de tempo/lugar/ação via facts (cena.local / cena.tempo / cena.acao).
+  - Anti-finalização + reabertura SEM texto fixo (micro-gancho variável, sem carimbo repetitivo).
+  - Remove perguntas no final (para de encerrar resposta com “e você?” / “o que quer?”).
+  - Exige iniciativa: ação concreta antes de qualquer pergunta.
 """
 
 import json
@@ -37,8 +39,6 @@ from characters.registry import _SERVICE_CACHE
 from .persona import get_persona
 
 logger = logging.getLogger(__name__)
-
-# Garantir que o cache de serviços seja limpo ao recarregar este módulo
 _SERVICE_CACHE.clear()
 
 
@@ -62,13 +62,50 @@ Estilo: adulto liberado (direto), com intensidade emocional e progressão clara 
 """.strip()
 
 
-def nsfw_enabled(usuario_key: str) -> bool:
-    """Controle LOCAL de NSFW da Mary.
+def _current_user_key() -> str:
+    uid = st.session_state.get("user_id") or st.session_state.get("usuario") or ""
+    uid = str(uid).strip() or "anon"
+    return f"{uid}::mary"
 
-    Prioridade:
-    1) st.session_state["mary_nsfw_on"] (checkbox no app)
-    2) Fact "mary.nsfw" (se existir no backend)
-    3) Fallback: True
+
+def cached_get_facts(usuario_key: str) -> Dict[str, Any]:
+    ck = f"facts::{usuario_key}"
+    if ck in st.session_state:
+        return st.session_state[ck]
+    try:
+        f = get_facts(usuario_key) or {}
+    except Exception:
+        f = {}
+    st.session_state[ck] = f
+    return f
+
+
+def cached_get_history(usuario_key: str) -> List[Dict[str, Any]]:
+    hk = f"history::{usuario_key}"
+    if hk in st.session_state:
+        return st.session_state[hk]
+    try:
+        docs = get_history_docs(usuario_key) or []
+    except Exception:
+        docs = []
+    st.session_state[hk] = docs
+    return docs
+
+
+def clear_user_cache(usuario_key: str) -> None:
+    for k in (f"facts::{usuario_key}", f"history::{usuario_key}"):
+        try:
+            if k in st.session_state:
+                del st.session_state[k]
+        except Exception:
+            pass
+
+
+def nsfw_enabled(usuario_key: str) -> bool:
+    """Prioridade:
+    1) st.session_state["mary_nsfw_on"]
+    2) Fact "mary.nsfw"
+    3) True
     """
     try:
         if "mary_nsfw_on" in st.session_state:
@@ -111,48 +148,6 @@ def _log_error(context: str, exc: Exception) -> None:
 
 
 # ==========================================================
-# KEYS / CACHE
-# ==========================================================
-def _current_user_key() -> str:
-    uid = st.session_state.get("user_id") or st.session_state.get("usuario") or ""
-    uid = str(uid).strip() or "anon"
-    return f"{uid}::mary"
-
-
-def cached_get_facts(usuario_key: str) -> Dict[str, Any]:
-    ck = f"facts::{usuario_key}"
-    if ck in st.session_state:
-        return st.session_state[ck]
-    try:
-        f = get_facts(usuario_key) or {}
-    except Exception:
-        f = {}
-    st.session_state[ck] = f
-    return f
-
-
-def cached_get_history(usuario_key: str) -> List[Dict[str, Any]]:
-    hk = f"history::{usuario_key}"
-    if hk in st.session_state:
-        return st.session_state[hk]
-    try:
-        docs = get_history_docs(usuario_key) or []
-    except Exception:
-        docs = []
-    st.session_state[hk] = docs
-    return docs
-
-
-def clear_user_cache(usuario_key: str) -> None:
-    for k in (f"facts::{usuario_key}", f"history::{usuario_key}"):
-        try:
-            if k in st.session_state:
-                del st.session_state[k]
-        except Exception:
-            pass
-
-
-# ==========================================================
 # PREFERÊNCIAS (técnicas)
 # ==========================================================
 def _read_prefs(facts: Dict[str, Any]) -> Dict[str, str]:
@@ -166,10 +161,46 @@ def _prefs_line(prefs: Dict[str, str]) -> str:
 
 
 # ==========================================================
+# CENA (LOCAL / TEMPO / AÇÃO)  ✅ NOVO
+# ==========================================================
+def _get_scene_state(usuario_key: str, facts: Dict[str, Any]) -> Tuple[str, str, str]:
+    """
+    Estado canônico da cena.
+    Compatibilidade:
+      - local_cena_atual continua existindo, mas a verdade é cena.local
+    """
+    local = str(facts.get("cena.local") or facts.get("local_cena_atual") or "").strip()
+    tempo = str(facts.get("cena.tempo") or "").strip()
+    acao  = str(facts.get("cena.acao") or "").strip()
+
+    if not local:
+        local = "—"
+    if not tempo:
+        tempo = "agora"
+    if not acao:
+        acao = "em andamento"
+
+    return local, tempo, acao
+
+
+def _persist_scene_basics(usuario_key: str, local: str, tempo: str, acao: str) -> None:
+    # mantém ambos: novo e legado
+    try:
+        if local and local != "—":
+            set_fact(usuario_key, "cena.local", local, {"fonte": "scene"})
+            set_fact(usuario_key, "local_cena_atual", local, {"fonte": "scene_compat"})
+        if tempo:
+            set_fact(usuario_key, "cena.tempo", tempo, {"fonte": "scene"})
+        if acao:
+            set_fact(usuario_key, "cena.acao", acao, {"fonte": "scene"})
+    except Exception:
+        pass
+
+
+# ==========================================================
 # JANELA / BUDGET
 # ==========================================================
 _DEFAULT_WINDOW = 16000
-
 
 def _get_window_for(model_id: str) -> int:
     if not model_id:
@@ -212,7 +243,7 @@ def _safe_max_output(window_tokens: int, prompt_tokens: int) -> int:
 
 
 # ==========================================================
-# SUMMARIZER (para históricos longos)
+# SUMMARIZER
 # ==========================================================
 def _llm_summarize(model_id: str, text: str) -> str:
     if not text.strip():
@@ -378,7 +409,7 @@ def _already_open_ended(text: str) -> bool:
     t = (text or "").strip()
     if not t:
         return True
-    return bool(re.search(r"(\?|\.\.\.|—)\s*$", t))
+    return bool(re.search(r"(\.\.\.|—)\s*$", t))  # NOTE: NÃO inclui '?'
 
 
 def _pick_hook(prompt: str, last_text: str) -> str:
@@ -413,21 +444,73 @@ def _ensure_continuation_hook(texto: str, prompt: str) -> str:
     return t
 
 
-# ✅ ESTA FUNÇÃO NÃO EXISTIA NO SEU ARQUIVO (era o bug principal)
+# ==========================================================
+# ✅ SEM PERGUNTA NO FINAL (o que você reclamou)
+# ==========================================================
+def _strip_final_question(texto: str) -> str:
+    """
+    Remove a vibe “NPC” (terminar sempre perguntando).
+    - Se o ÚLTIMO parágrafo termina com '?', troca por '.'.
+    - Se a última linha é uma pergunta curta típica, converte em afirmação/gancho.
+    """
+    t = (texto or "").rstrip()
+    if not t:
+        return t
+
+    # pega última linha
+    lines = t.splitlines()
+    # remove linhas vazias finais
+    while lines and not lines[-1].strip():
+        lines.pop()
+
+    if not lines:
+        return t
+
+    last = lines[-1].strip()
+
+    # pergunta típica no final → neutraliza
+    typical = [
+        "o que você quer",
+        "prefere",
+        "quer que eu",
+        "me diz",
+        "e você",
+        "tá entendendo",
+        "certo",
+        "né",
+    ]
+    low = last.lower()
+
+    if last.endswith("?"):
+        # troca '?' por '.'
+        last2 = last[:-1].rstrip() + "."
+        # se era “pergunta típica”, dá um pequeno fechamento afirmativo
+        if any(x in low for x in typical) and len(last) < 140:
+            last2 = re.sub(r"\?\s*$", ".", last).rstrip("?").rstrip() + "."
+        lines[-1] = last2
+        return "\n".join(lines).rstrip()
+
+    return t
+
+
 def _enforce_scene_flow(texto: str, prompt: str, usuario_key: str) -> str:
-    """Camada final obrigatória de continuidade (sem texto fixo)."""
+    """Camada final obrigatória: continuidade + sem pergunta final."""
     if not texto:
         return texto
-    return _ensure_continuation_hook(texto, prompt)
+    texto = _ensure_continuation_hook(texto, prompt)
+    texto = _strip_final_question(texto)
+    return texto
 
 
 # ==========================================================
-# SYSTEM BLOCK (curto e estável)
+# SYSTEM BLOCK (curto e estável)  ✅ agora com CENA
 # ==========================================================
 def _build_system_block(
     persona_text: str,
     rolling_summary: str,
     scene_loc: str,
+    scene_time: str,
+    scene_action: str,
     entities_line: str,
     evidence: str,
     prefs_line: str,
@@ -436,7 +519,6 @@ def _build_system_block(
     events_block: str,
     thematic_block: str,
     lore_block: str,
-    scene_time: str = "",
 ) -> str:
     thematic = f"\n\nMEMÓRIA_TEMÁTICA:\n{thematic_block}" if thematic_block else ""
     events = f"\n\nEVENTOS_FIXOS_MARY:\n{events_block}" if events_block else ""
@@ -447,8 +529,9 @@ Você é **Mary Massariol – Esposa Cúmplice**, personagem fixa em um roleplay
 
 REGRAS DURAS:
 - Fale SEMPRE em primeira pessoa (eu). Nunca quebre a quarta parede.
-- Mantenha continuidade ABSOLUTA de cena com base no histórico.
-- Priorize memórias canônicas (RESUMO_CONTINUO, MEMÓRIA_PIN, EVENTOS_FIXOS_MARY) quando houver conflito.
+- Continuidade ABSOLUTA: não reinicie cena, não teleporte e não troque lugar/tempo sem motivo.
+- INICIATIVA: em toda resposta, faça pelo menos 1 ação concreta (gesto, movimento, aproximação, decisão) antes de qualquer pergunta.
+- NÃO termine resposta com pergunta. (Nada de “o que você quer?” no final.)
 
 PERSONA (núcleo fixo):
 {persona_text}
@@ -465,9 +548,10 @@ ENTIDADES:
 EVIDENCIA_RECENTE_DO_USUARIO:
 {evidence}
 
-CENA_ATUAL:
+CENA_ATUAL (CANÔNICA):
 - Local: {scene_loc or '—'}
-- Momento: {scene_time or '—'}
+- Tempo: {scene_time or 'agora'}
+- Ação em andamento: {scene_action or 'em andamento'}
 
 FOCO_SENSORIAL_DESTE_TURNO:
 - Priorize: {sensory_focus}
@@ -478,7 +562,7 @@ FOCO_SENSORIAL_DESTE_TURNO:
 CONTINUIDADE_DE_CENA (OBRIGATÓRIO):
 - NÃO conclua automaticamente.
 - Se o usuário não pedir para finalizar, evite “pós-cena/encerramento”.
-- Mantenha a cena em andamento, com naturalidade (sem frases padrão repetidas).
+- Mantenha a cena em andamento com naturalidade (sem frases padrão repetidas).
 
 {nsfw_block}
 
@@ -667,6 +751,12 @@ class MaryService(BaseCharacter):
                     vv = str(val)
                     container.caption(vv[:280] + ("..." if len(vv) > 280 else ""))
 
+        with container.expander("📌 Cena atual (canônica)", expanded=False):
+            local, tempo, acao = _get_scene_state(usuario_key, f)
+            container.caption(f"Local: {local}")
+            container.caption(f"Tempo: {tempo}")
+            container.caption(f"Ação: {acao}")
+
     def reply(self, user: str, model: str) -> str:
         prompt = (
             st.session_state.get("chat_input")
@@ -690,34 +780,48 @@ class MaryService(BaseCharacter):
             set_fact(usuario_key, "mary.rs.v2.ts", time.time(), {"fonte": "cmd"})
             set_fact(usuario_key, "mary.reset.historico.ts", time.time(), {"fonte": "cmd"})
             clear_user_cache(usuario_key)
-            return "✅ Reset de sessão aplicado: resumo rolante limpo. Vamos seguir daqui com leveza e continuidade."
+            return "✅ Reset aplicado: resumo rolante limpo. Continuidade de cena preservada."
 
         if plow == "/reset total":
             f_all = cached_get_facts(usuario_key) or {}
             for k in list(f_all.keys()):
-                if isinstance(k, str) and (k.startswith("mary.evento.") or k.startswith("mary.eventos.") or k.startswith("mary.ent.")):
+                if isinstance(k, str) and (
+                    k.startswith("mary.evento.")
+                    or k.startswith("mary.eventos.")
+                    or k.startswith("mary.ent.")
+                ):
                     try:
                         set_fact(usuario_key, k, "", {"fonte": "cmd_reset_total"})
                     except Exception:
                         pass
+
             set_fact(usuario_key, "mary.rs.v2", "", {"fonte": "cmd_reset_total"})
             set_fact(usuario_key, "mary.rs.v2.ts", time.time(), {"fonte": "cmd_reset_total"})
             set_fact(usuario_key, "mary.reset.total.ts", time.time(), {"fonte": "cmd_reset_total"})
+
+            # ⚠️ IMPORTANTE: mantemos a cena (local/tempo/ação) para não “resetar o mundo”
             clear_user_cache(usuario_key)
-            return "⚠️ RESET TOTAL aplicado: eventos/entidades e resumo rolante foram limpos (no nível de facts)."
+            return "⚠️ RESET TOTAL aplicado: eventos/entidades e resumo rolante limpos (facts). Cena (local/tempo/ação) preservada."
 
         if plow.startswith("/local "):
             novo_local = prompt[len("/local "):].strip()
             if novo_local:
+                # ✅ atualiza local legado e novo estado de cena
                 set_fact(usuario_key, "local_cena_atual", novo_local, {"fonte": "chat"})
+                set_fact(usuario_key, "cena.local", novo_local, {"fonte": "chat"})
                 clear_user_cache(usuario_key)
                 return f"📍 Local da cena atualizado para: **{novo_local}**."
 
+        # =========================
+        # PERSONA + FATOS + CENA
+        # =========================
         persona_text, history_boot = get_persona()
 
         f_all = cached_get_facts(usuario_key) or {}
         prefs = _read_prefs(f_all)
-        local_atual = get_fact(usuario_key, "local_cena_atual", "") or ""
+
+        # ✅ Estado canônico de cena
+        scene_loc, scene_time, scene_action = _get_scene_state(usuario_key, f_all)
 
         # ✅ NSFW block SEM duplicação
         nsfw_on = nsfw_enabled(usuario_key)
@@ -751,7 +855,9 @@ class MaryService(BaseCharacter):
         system_block = _build_system_block(
             persona_text=persona_text,
             rolling_summary=rolling,
-            scene_loc=local_atual,
+            scene_loc=scene_loc,
+            scene_time=scene_time,
+            scene_action=scene_action,
             entities_line=entities_line,
             evidence=evidence,
             prefs_line=_prefs_line(prefs),
@@ -760,7 +866,6 @@ class MaryService(BaseCharacter):
             events_block=events_block,
             thematic_block=thematic_block,
             lore_block=lore_block,
-            scene_time=str(st.session_state.get("momento_atual", "") or ""),
         )
 
         hist_msgs = self._montar_historico(
@@ -836,7 +941,7 @@ class MaryService(BaseCharacter):
             if iteration >= max_iter:
                 break
 
-        # ✅ anti-finalização / reabertura
+        # ✅ pós-processamento FINAL: continuidade + sem pergunta final
         texto = _enforce_scene_flow(texto, prompt, usuario_key)
 
         # Ultra IA opcional (✅ com trava anti-conclusão)
@@ -844,7 +949,7 @@ class MaryService(BaseCharacter):
             try:
                 notes = critic_review(
                     model,
-                    system_block + "\n\nREGRA EXTRA: não conclua cenas íntimas automaticamente; mantenha continuidade aberta.",
+                    system_block + "\n\nREGRA EXTRA: não conclua automaticamente; não termine com pergunta; mantenha local/tempo/ação.",
                     prompt,
                     texto,
                 )
@@ -852,6 +957,9 @@ class MaryService(BaseCharacter):
                 texto = _enforce_scene_flow(texto, prompt, usuario_key)
             except Exception as e:
                 _log_error("ultra_ia", e)
+
+        # ✅ Persiste cena mínima (não deixa virar “vazio”)
+        _persist_scene_basics(usuario_key, scene_loc, scene_time, scene_action)
 
         try:
             tag = f"{provider}:{used_model}" if provider and used_model else model
@@ -942,15 +1050,13 @@ class MaryService(BaseCharacter):
             "MEMÓRIA_PIN: "
             f"FATOS={{ {'; '.join(blocos)} }}.\n"
             "- Use estes FATOS como verdade canônica.\n"
-            "- Se algo NÃO estiver na memória, pergunte ou siga o que o usuário disser — não invente."
+            "- Se algo NÃO estiver na memória, siga o que o usuário disser — não invente."
         )
 
     def _montar_historico(self, usuario_key: str, history_boot: List[Dict[str, str]], model: str, verbatim_ultimos: int = 30) -> List[Dict[str, str]]:
         hist_budget, _, _ = _budget_slices(model)
         docs = cached_get_history(usuario_key)
 
-        # ✅ NÃO força "persona boot" se backend falhou ou está vazio.
-        # Boot só deve existir para “primeiro contato”, e mesmo assim mínimo.
         if not docs:
             st.session_state["_mem_drop_report"] = {}
             return history_boot[:] if history_boot else []
