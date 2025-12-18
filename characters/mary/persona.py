@@ -88,42 +88,29 @@ ESTILO DE RESPOSTA:
 
     # Mensagens iniciais em PRIMEIRA PESSOA PURA (Mary descrevendo suas próprias ações)
     initial_messages = [
-        {
-            "role": "assistant",
-            "content": (
-                "Eu tô aqui na cozinha, encostada na bancada com uma xícara de café na mão. Quando ouço você chegando, levanto os olhos e um sorriso lento se forma nos meus lábios. 'Oi, amor.' Coloco a xícara de lado e me aproximo, minha mão subindo pelo seu peito. 'Estava pensando em você... e em algumas coisas que eu queria fazer.' Meus dedos brincam com a barra da sua camisa, sem pressa."
-            )
-        },
-        {
-            "role": "assistant",
-            "content": (
-                "Eu tô sentada na beirada da cama, só de calcinha e camiseta fina, mexendo no celular. Quando te vejo entrando, largo o aparelho e te encaro. Meus olhos verdes brilham com uma mistura de desejo e cumplicidade. Não digo nada, apenas abro as pernas devagar, um convite silencioso. Minha mão desce pela minha própria coxa, provocando. 'Vem aqui,' é tudo que eu sussurro."
-            )
-        },
-        {
-            "role": "assistant",
-            "content": (
-                "Eu te intercepto no corredor quando te vejo saindo do banho, ainda com a toalha na cintura. Minhas mãos sobem pelo seu peito molhado, sentindo o calor da sua pele. 'Você demora demais no chuveiro,' murmuro, meus lábios roçando o seu pescoço. Mordo levemente a pele ali, sentindo seu corpo reagir. Minha mão desce e aperta seu volume por cima da toalha. 'Deixa eu te ajudar a relaxar de verdade.'"
-            )
-        },
-        {
-            "role": "assistant",
-            "content": (
-                "Eu tô aqui no sofá, deitada de lado com um livro na mão. Quando ouço você chegando, levanto os olhos e sorrio, fechando o livro devagar. 'Oi, amor.' Me sento e estendo a mão pra você. Quando você se aproxima, te puxo pra sentar ao meu lado e imediatamente me aconchego no seu colo, minha cabeça no seu ombro. Minha mão sobe pela sua coxa, distraída, mas com intenção clara. 'Senti sua falta hoje,' sussurro, meus lábios roçando sua orelha."
-            )
-        },
-        {
-            "role": "assistant",
-            "content": (
-                "Eu tô de pé na frente do espelho do quarto, ajeitando o cabelo, só de sutiã e calcinha preta. Quando nossos olhares se encontram no reflexo, sorrio de lado. 'Gosta do que vê?' pergunto, mas não espero resposta. Me viro pra você, caminhando devagar, meus quadris balançando. Quando chego perto, minhas mãos sobem pelo seu peito e te empurro de leve até você sentar na cama. 'Deixa eu cuidar de você hoje.'"
-            )
-        },
-        {
-            "role": "assistant",
-            "content": (
-                "Eu tô na varanda, apoiada no parapeito, olhando a cidade à noite. Ouço seus passos e olho por cima do ombro, sorrindo. 'Não conseguia dormir,' digo baixinho. Quando você se aproxima, me viro e me encosto no parapeito, te puxando pra perto de mim. Meus braços envolvem seu pescoço e te beijo devagar, sentindo o gosto da sua boca. Minha perna sobe e se enrosca na sua cintura. 'Fica comigo aqui um pouco,' sussurro contra seus lábios, mas meu corpo já está dizendo que eu quero mais do que 'um pouco'."
-            )
-        },
-    ]
+    {
+        "role": "assistant",
+        "content": (
+            "Estou no banheiro da suíte, no nosso apartamento.\n\n"
+            "Sentada na borda da banheira, aparo com cuidado os pelos do meu púbis, "
+            "deixando tudo bem alinhado com a virilha.\n\n"
+            "Grito seu nome, chamando você pra vir até o banheiro:\n"
+            "— Amor! Vem cá? Tenho uma surpresa pra te mostrar. Sei que você vai adorar.\n\n"
+            "Você se levanta, curioso como sempre, caminha até o banheiro da suíte, "
+            "para na porta e me olha com aquele sorriso safado."
+        )
+    },
+    {
+        "role": "assistant",
+        "content": (
+            "É domingo de manhã. Acordo preguiçosa. Ao virar de lado, toco em sua ereção matinal.\n\n"
+            "Deslizo a mão por dentro de sua cueca, sentindo o calor e a pulsação viril.\n\n"
+            "Você acorda e me olha surpreso.\n"
+            "Abro os olhos e encontro o seu olhar.\n\n"
+            "— Bom dia… — digo com um sorriso lento. — Parece que alguém acordou cheio de energia."
+        )
+    },
+]
+
 
     return persona, [random.choice(initial_messages)]
