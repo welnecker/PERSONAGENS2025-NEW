@@ -705,22 +705,23 @@ def _enforce_scene_flow(texto: str, prompt: str, usuario_key: str) -> str:
 # ==========================================================
 def _build_system_block(
     persona_text: str,
-    rolling_summary: str,
-    spatial_context: str,
-    sexual_state_instructions: str,  # ✅ v4
-    scene_loc: str,
-    scene_time: str,
-    scene_action: str,
-    physical_state: str,  # ✅ NOVO: estado físico ancorado (vestuário/postura/itens)
-    entities_line: str,
-    evidence: str,
-    prefs_line: str,
-    sensory_focus: str,
-    nsfw_block: str,
-    events_block: str,
-    thematic_block: str,
-    lore_block: str,
+    rolling_summary: str = "",
+    spatial_context: str = "",
+    sexual_state_instructions: str = "",  # ✅ v4 (seguro)
+    scene_loc: str = "",
+    scene_time: str = "agora",
+    scene_action: str = "",
+    physical_state: str = "",  # ✅ estado físico ancorado (roupas/postura/itens)
+    entities_line: str = "",
+    evidence: str = "",
+    prefs_line: str = "",
+    sensory_focus: str = "",
+    nsfw_block: str = "",
+    events_block: str = "",
+    thematic_block: str = "",
+    lore_block: str = "",
 ) -> str:
+
     thematic = f"\n\nMEMÓRIA_TEMÁTICA:\n{thematic_block}" if thematic_block else ""
     events = f"\n\nEVENTOS_FIXOS_MARY:\n{events_block}" if events_block else ""
     lore = f"\n\nLOREBOOK_RELEVANTE:\n{lore_block}" if lore_block else ""
