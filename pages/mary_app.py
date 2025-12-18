@@ -46,73 +46,90 @@ def _apply_dark_ui() -> None:
     st.markdown(
         """
         <style>
-        /* Fundo geral */
+        /* ===== Base ===== */
         .stApp {
-            background: #000 !important;
+            background-color: #000 !important;
+        }
+
+        /* Texto padrão (principal + sidebar) */
+        .stApp, .stApp * {
             color: #f2f2f2 !important;
         }
 
         /* Sidebar */
         section[data-testid="stSidebar"] {
-            background: #060606 !important;
-            border-right: 1px solid #141414 !important;
+            background-color: #070707 !important;
+            border-right: 1px solid #1a1a1a !important;
         }
-
-        /* Textos */
-        html, body, [class*="css"]  {
+        section[data-testid="stSidebar"] * {
             color: #f2f2f2 !important;
         }
 
-        /* Blocos / cards */
+        /* Labels (inputs) */
+        label, label * {
+            color: #f2f2f2 !important;
+        }
+
+        /* Inputs */
+        input, textarea {
+            background-color: #0b0b0b !important;
+            color: #f2f2f2 !important;
+            border: 1px solid #2a2a2a !important;
+        }
+
+        /* Selectbox / multiselect (container) */
+        div[data-baseweb="select"] > div {
+            background-color: #0b0b0b !important;
+            border: 1px solid #2a2a2a !important;
+        }
+        div[data-baseweb="select"] * {
+            color: #f2f2f2 !important;
+        }
+
+        /* Botões */
+        button {
+            background-color: #111 !important;
+            color: #f2f2f2 !important;
+            border: 1px solid #2a2a2a !important;
+        }
+        button:hover {
+            border-color: #3a3a3a !important;
+        }
+
+        /* Expander / cards */
         div[data-testid="stExpander"] {
-            background: #0a0a0a !important;
-            border: 1px solid #141414 !important;
+            background-color: #0a0a0a !important;
+            border: 1px solid #1a1a1a !important;
             border-radius: 12px !important;
         }
 
-        /* Chat message containers */
-        div[data-testid="stChatMessage"] {
-            background: transparent !important;
-        }
-
-        /* “Bolinhas” do chat (conteúdo) */
-        div[data-testid="stChatMessage"] > div {
-            background: #0b0b0b !important;
-            border: 1px solid #1a1a1a !important;
-            border-radius: 14px !important;
-            padding: 14px 14px 10px 14px !important;
-        }
-
-        /* Parágrafos bem espaçados */
-        div[data-testid="stChatMessage"] p {
-            margin: 0 0 0.95rem 0 !important;
-            line-height: 1.55 !important;
-            font-size: 1.02rem !important;
-        }
-
-        /* Títulos e separadores */
+        /* Separadores */
         hr {
             border: none !important;
             border-top: 1px solid #1a1a1a !important;
         }
 
-        /* Inputs */
-        input, textarea {
-            background: #0b0b0b !important;
-            color: #f2f2f2 !important;
-            border: 1px solid #222 !important;
-        }
-
-        /* Botões */
-        button[kind="primary"] {
-            background: #1a1a1a !important;
-            border: 1px solid #2a2a2a !important;
-        }
-
         /* Código */
         pre, code {
-            background: #0b0b0b !important;
+            background-color: #0b0b0b !important;
             border: 1px solid #1a1a1a !important;
+            color: #f2f2f2 !important;
+        }
+
+        /* Chat bubbles */
+        div[data-testid="stChatMessage"] > div {
+            background-color: #0b0b0b !important;
+            border: 1px solid #1a1a1a !important;
+            border-radius: 14px !important;
+            padding: 14px 14px 10px 14px !important;
+        }
+
+        /* Parágrafos do chat */
+        div[data-testid="stChatMessage"] p {
+            margin: 0 0 0.95rem 0 !important;
+            line-height: 1.55 !important;
+            font-size: 1.02rem !important;
+            color: #f2f2f2 !important;
         }
         </style>
         """,
