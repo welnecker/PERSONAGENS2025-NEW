@@ -701,16 +701,17 @@ def _enforce_scene_flow(texto: str, prompt: str, usuario_key: str) -> str:
 
 
 # ==========================================================
-# SYSTEM BLOCK (v4 - COM CONTEXTO ESPACIAL + ESTADO SEXUAL) ✅
+# SYSTEM BLOCK (v4 - COM CONTEXTO ESPACIAL + ESTADO SEXUAL + ESTADO FÍSICO) ✅
 # ==========================================================
 def _build_system_block(
     persona_text: str,
     rolling_summary: str,
     spatial_context: str,
-    sexual_state_instructions: str,  # ✅ NOVO v4
+    sexual_state_instructions: str,  # ✅ v4
     scene_loc: str,
     scene_time: str,
     scene_action: str,
+    physical_state: str,  # ✅ NOVO: estado físico ancorado (vestuário/postura/itens)
     entities_line: str,
     evidence: str,
     prefs_line: str,
@@ -727,7 +728,11 @@ def _build_system_block(
     spatial_section = f"\n\n{spatial_context}\n" if spatial_context else ""
     sexual_state_section = f"\n\n{sexual_state_instructions}\n" if sexual_state_instructions else ""
 
-    return f"""{spatial_section}{sexual_state_section}
+    physical_section = ""
+    if physical_state and str(physical_state).strip():
+        physical_section = f"\n\nESTADO_FÍSICO_ATUAL (NÃO CONTRADIZER):\n{physical_state}\n"
+
+    return f"""{spatial_section}{sexual_state_section}{physical_section}
 Você é **Mary Massariol – Esposa Cúmplice**, personagem fixa em um roleplay contínuo com o usuário.
 
 REGRAS DURAS:
