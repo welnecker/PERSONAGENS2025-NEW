@@ -123,83 +123,165 @@ def save_interaction(usuario: str, mensagem_usuario: str, resposta_mary: str, mo
     })
 
 
-def get_history_docs(usuario: str, limit: int = 400) -> List[Dict[str, Any]]:
+def get_history_docs(usuario: str, limit: int = 400):
+    """Retorna histórico em ordem cronológica (mais antigo → mais recente).
+    Robusto para backends:
+    - Mongo/PyMongo (cursor com .sort/.limit)
+    - Backends que retornam LISTA no .find()
     """
-    Ordena por ts asc; fallback _id asc.
-    Robustez: docs legados sem ts continuam ordenando por _id.
-    """
-    cur = (
-        _hist()
-        .find({"usuario": usuario})
-        .sort([("ts", 1), ("_id", 1)])
-        .limit(limit)
-    )
-    return list(cur)
+    col = get_col("history")
+    q = {"usuario": usuario}
+
+    docs = []
+    try:
+        if hasattr(col, "find"):
+            res = col.find(q)
+
+            # Cursor (pymongo)
+            if hasattr(res, "sort") and hasattr(res, "limit"):
+                try:
+                    res = res.sort([("ts", 1), ("_id", 1)]).limit(int(limit))
+                    docs = list(res)
+                except TypeError:
+                    # .find() devolveu lista (não dá pra encadear .sort(list))
+                    docs = list(res)
+            else:
+                docs = list(res)
+
+        elif isinstance(col, list):
+            docs = [d for d in col if isinstance(d, dict) and d.get("usuario") == usuario]
+    except Exception:
+        docs = []
+
+    def _k(d):
+        ts = d.get("ts", 0) or 0
+        _id = d.get("_id", "") or ""
+        return (ts, str(_id))
+
+    docs = [d for d in docs if isinstance(d, dict)]
+    docs_sorted = sorted(docs, key=_k)
+
+    # mantém os mais recentes, mas em ordem cronológica
+    if limit and len(docs_sorted) > int(limit):
+        docs_sorted = docs_sorted[-int(limit):]
+
+    return docs_sorted
 
 
-def get_history_docs_multi(
-    users_or_keys: List[str],
-    limit: int = 400,
-    limit_per_key: int = 400,
-) -> List[Dict[str, Any]]:
-    """
-    Histórico unificado para várias chaves (ex.: ["Janio::mary", "Janio"]).
-
-    - Busca por key separadamente (evita que uma key "roube" todo o limit).
-    - Faz merge + sort por ts asc (fallback _id asc).
-    - Retorna no máximo `limit` docs finais.
-    """
-    keys = [k for k in (users_or_keys or []) if k]
-    if not keys:
+def get_history_docs_multi(usuarios: list[str], limit: int = 800):
+    """Une histórico de múltiplas chaves (novo + legado), ordena e devolve os mais recentes."""
+    if not usuarios:
         return []
 
-    all_docs: List[Dict[str, Any]] = []
-    for k in keys:
-        cur = (
-            _hist()
-            .find({"usuario": k})
-            .sort([("ts", 1), ("_id", 1)])
-            .limit(limit_per_key)
-        )
-        all_docs.extend(list(cur))
+    col = get_col("history")
+    q = {"usuario": {"$in": usuarios}}
 
-    def _sort_key(d: Dict[str, Any]):
-        ts = d.get("ts")
-        # ts ideal é datetime; legado pode não ter ts
-        if not isinstance(ts, datetime):
-            ts = datetime.min
-        return (ts, d.get("_id"))
+    docs = []
+    try:
+        if hasattr(col, "find"):
+            res = col.find(q)
 
-    all_docs.sort(key=_sort_key)
+            if hasattr(res, "sort") and hasattr(res, "limit"):
+                try:
+                    # pega “a mais” pra depois cortar sem perder os últimos
+                    res = res.sort([("ts", 1), ("_id", 1)]).limit(int(limit) * 3)
+                    docs = list(res)
+                except TypeError:
+                    docs = list(res)
+            else:
+                docs = list(res)
 
-    if limit and len(all_docs) > limit:
-        return all_docs[-limit:]
-    return all_docs
+        elif isinstance(col, list):
+            u_set = set(usuarios)
+            docs = [d for d in col if isinstance(d, dict) and d.get("usuario") in u_set]
+    except Exception:
+        docs = []
 
+    def _k(d):
+        ts = d.get("ts", 0) or 0
+        _id = d.get("_id", "") or ""
+        return (ts, str(_id))
 
-def delete_user_history(usuario: str) -> int:
-    r = _hist().delete_many({"usuario": usuario})
-    return int(getattr(r, "deleted_count", 0))
+    docs = [d for d in docs if isinstance(d, dict)]
+    docs_sorted = sorted(docs, key=_k)
+
+    if limit and len(docs_sorted) > int(limit):
+        docs_sorted = docs_sorted[-int(limit):]
+
+    return docs_sorted
 
 
 def delete_last_interaction(usuario: str) -> bool:
-    """
-    Remove o último turno (maior ts; fallback _id).
-    Robusto para docs legados sem 'ts'.
-    """
-    last = _hist().find_one({"usuario": usuario}, sort=[("ts", -1), ("_id", -1)])
-    if not last:
-        last = _hist().find_one({"usuario": usuario}, sort=[("_id", -1)])
+    """Apaga o ÚLTIMO registro do histórico do usuário."""
+    col = get_col("history")
 
-    if not last:
-        return False
+    # 1) PyMongo
+    try:
+        if hasattr(col, "find_one") and hasattr(col, "delete_one"):
+            last = col.find_one({"usuario": usuario}, sort=[("ts", -1), ("_id", -1)])
+            if not last:
+                return False
+            _id = last.get("_id")
+            if _id is None:
+                return False
+            res = col.delete_one({"_id": _id})
+            return bool(getattr(res, "deleted_count", 0))
+    except Exception:
+        pass
 
-    r = _hist().delete_one({"_id": last["_id"]})
+    # 2) fallback: usa get_history_docs e tenta deletar por _id
+    try:
+        docs = get_history_docs(usuario, limit=5000) or []
+        if not docs:
+            return False
+        last = docs[-1]
+        _id = last.get("_id", None)
 
-    if isinstance(r, dict):
-        return int(r.get("deleted_count", 0) or 0) > 0
+        if hasattr(col, "delete_one") and _id is not None:
+            res = col.delete_one({"_id": _id})
+            return bool(getattr(res, "deleted_count", 0))
 
-    return int(getattr(r, "deleted_count", 0) or 0) > 0
+        # 3) último fallback: lista mutável
+        if isinstance(col, list):
+            if _id is not None:
+                for i in range(len(col) - 1, -1, -1):
+                    d = col[i]
+                    if isinstance(d, dict) and d.get("_id") == _id:
+                        col.pop(i)
+                        return True
+            for i in range(len(col) - 1, -1, -1):
+                d = col[i]
+                if isinstance(d, dict) and d.get("usuario") == usuario:
+                    col.pop(i)
+                    return True
+    except Exception:
+        pass
+
+    return False
+
+
+def delete_user_history(usuario: str) -> int:
+    """Apaga TODO histórico do usuário. Retorna quantidade removida (quando possível)."""
+    col = get_col("history")
+
+    # PyMongo
+    try:
+        if hasattr(col, "delete_many"):
+            res = col.delete_many({"usuario": usuario})
+            return int(getattr(res, "deleted_count", 0) or 0)
+    except Exception:
+        pass
+
+    # Lista mutável
+    try:
+        if isinstance(col, list):
+            before = len(col)
+            col[:] = [d for d in col if not (isinstance(d, dict) and d.get("usuario") == usuario)]
+            return before - len(col)
+    except Exception:
+        pass
+
+    return 0
 
 
 
