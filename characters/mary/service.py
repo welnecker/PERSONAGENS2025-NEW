@@ -376,22 +376,45 @@ def _get_window_for(model_id: str) -> int:
     if not model_id:
         return _DEFAULT_WINDOW
     m = model_id.lower().strip()
+
+    # DeepSeek / R1 family
     if "deepseek-r1" in m or "deepseek-reasoner" in m:
-        return 128000
+        return 163840  # R1 e afins (conservador e realista)
+
+    # DeepSeek v3 0324 (OpenRouter) é 8k (se você usa esse id exato)
+    if "deepseek/deepseek-chat-v3-0324" in m:
+        return 8192
+
+    # DeepSeek-chat genérico (às vezes providers anunciam mais, mas se for v3-0324 use 8k)
     if "deepseek-chat" in m:
         return 65536
+
+    # GPTs
     if "gpt-4.1" in m or "gpt-4.5" in m:
         return 128000
+
+    # Llama
     if "llama-3.1" in m:
         return 128000
+
+    # Qwen
     if "qwen2.5-72b" in m:
         return 32000
+    if "qwen3-coder-480b" in m:
+        return 262144  # 256k
+
+    # Claude
     if "claude-3.5" in m:
         return 200000
+
+    # Grok
     if "grok-4.1" in m:
-        return 200000
-    if "tng-r1t-chimera" in m:
+        return 2000000  # grok-4.1-fast (2M)
+
+    # TNG Chimera
+    if "tngtech/deepseek-r1t2-chimera:free" in m or "deepseek-r1t2-chimera" in m or "tng-r1t-chimera" in m:
         return 163840
+
     return _DEFAULT_WINDOW
 
 
@@ -412,6 +435,16 @@ def _safe_max_output(window_tokens: int, prompt_tokens: int) -> int:
     return max(512, max_out)
 
 
+def _estimate_messages_tokens(messages: List[Dict[str, Any]]) -> int:
+    # heurística: conteúdo + role + overhead estrutural
+    total = 0
+    for m in messages:
+        total += toklen(m.get("role", "") or "")
+        total += toklen(m.get("content", "") or "")
+        total += 8
+    return total
+
+
 # ==========================================================
 # SUMMARIZER
 # ==========================================================
@@ -427,7 +460,7 @@ def _llm_summarize(model_id: str, text: str) -> str:
     use_model = model_id or candidates[0]
 
     mlow = (use_model or "").lower()
-    if any(x in mlow for x in ["grok-4.1", "tng-r1t-chimera"]):
+    if any(x in mlow for x in ["grok-4.1", "tngtech/deepseek-r1t2-chimera", "tng-r1t-chimera"]):
         available = set(list_models() or [])
         for c in candidates:
             if c in available:
@@ -534,7 +567,7 @@ def _detect_thematic_tags_from_prompt(prompt: str) -> List[str]:
 def _get_thematic_memories_for_tags(usuario_key: str, tags: List[str]) -> str:
     if not tags:
         return ""
-    
+
     facts = cached_get_facts(usuario_key) or {}
     lines = []
     for tag in tags:
@@ -542,7 +575,7 @@ def _get_thematic_memories_for_tags(usuario_key: str, tags: List[str]) -> str:
         val = facts.get(key)
         if val:
             lines.append(f"- [{tag}] {str(val).strip()}")
-    
+
     return "\n".join(lines) if lines else ""
 
 
@@ -617,11 +650,6 @@ def _ensure_continuation_hook(texto: str, prompt: str) -> str:
 # ✅ SEM PERGUNTA NO FINAL
 # ==========================================================
 def _strip_final_question(texto: str) -> str:
-    """
-    Remove a vibe "NPC" (terminar sempre perguntando).
-    - Se o ÚLTIMO parágrafo termina com '?', troca por '.'.
-    - Se a última linha é uma pergunta curta típica, converte em afirmação/gancho.
-    """
     t = (texto or "").rstrip()
     if not t:
         return t
@@ -659,7 +687,6 @@ def _strip_final_question(texto: str) -> str:
 
 
 def _enforce_scene_flow(texto: str, prompt: str, usuario_key: str) -> str:
-    """Pós-processamento final: continuidade + sem pergunta final."""
     texto = _strip_final_question(texto)
     texto = _ensure_continuation_hook(texto, prompt)
     return texto
@@ -689,10 +716,7 @@ def _build_system_block(
     events = f"\n\nEVENTOS_FIXOS_MARY:\n{events_block}" if events_block else ""
     lore = f"\n\nLOREBOOK_RELEVANTE:\n{lore_block}" if lore_block else ""
 
-    # ✅ v3: Contexto espacial injetado no topo
     spatial_section = f"\n\n{spatial_context}\n" if spatial_context else ""
-    
-    # ✅ v4: Instruções de estado sexual
     sexual_state_section = f"\n\n{sexual_state_instructions}\n" if sexual_state_instructions else ""
 
     return f"""{spatial_section}{sexual_state_section}
@@ -797,6 +821,10 @@ def _robust_chat_call(
         return data, used_model, prov
     except Exception as e:
         _log_error("robust_chat_call_main", e)
+        # retry automático em overflow de contexto: system mínimo + user
+        s = str(e).lower()
+        if "context" in s and ("too long" in s or "maximum" in s or "length" in s):
+            raise RuntimeError(str(e))
 
     for fb in fallback_models:
         try:
@@ -902,6 +930,10 @@ class MaryService(BaseCharacter):
         if not prompt:
             return ""
 
+        # modelo padrão (se vier vazio)
+        if not model:
+            model = "tngtech/deepseek-r1t2-chimera:free"
+
         usuario_key = _current_user_key()
         plow = prompt.lower().strip()
 
@@ -912,7 +944,6 @@ class MaryService(BaseCharacter):
         if mudou and novo_local:
             _persist_scene_basics(usuario_key, novo_local, "agora", "transição de local")
             clear_user_cache(usuario_key)
-            # Retorna uma mini-resposta de transição
             return f"_(Eu te puxo pela mão e te levo pro {novo_local}...)_"
 
         # =========================
@@ -961,21 +992,17 @@ class MaryService(BaseCharacter):
         f_all = cached_get_facts(usuario_key) or {}
         prefs = _read_prefs(f_all)
 
-        # ✅ Estado canônico de cena
         scene_loc, scene_time, scene_action = _get_scene_state(usuario_key, f_all)
-
-        # ✅ v3: Constrói o contexto espacial
         spatial_context = _build_spatial_context(scene_loc, scene_time, scene_action)
 
-        # ✅ v4: Estado sexual
         sexual_state = _get_sexual_state(usuario_key, f_all)
         sexual_state_instructions = _build_sexual_state_instructions(sexual_state)
 
-        # ✅ NSFW block
         nsfw_on = nsfw_enabled(usuario_key)
         st.session_state["_mary_effective_nsfw"] = bool(nsfw_on)
         nsfw_block = NSFW_BALANCED_STYLE if nsfw_on else SAFE_SENSUAL_STYLE
 
+        # ✅ memoria_pin agora vai para o TOPO do system (mais robusto)
         memoria_pin = self._build_memory_pin(usuario_key, user)
 
         tags = _detect_thematic_tags_from_prompt(prompt)
@@ -989,6 +1016,7 @@ class MaryService(BaseCharacter):
 
         rolling = str(f_all.get("mary.rs.v2", "") or "")
         entities_line = _entities_to_line(f_all)
+
         docs = cached_get_history(usuario_key) or []
         evidence = self._compact_user_evidence(docs, max_chars=320)
 
@@ -1000,25 +1028,41 @@ class MaryService(BaseCharacter):
 
         lore_block = _get_lorebook(usuario_key, prompt, k=4, max_chars=900)
 
-        # ✅ v4: Monta o system block COM contexto espacial + estado sexual
-        system_block = _build_system_block(
+        # ==========================================================
+        # ✅ SYSTEM CORE + OPTIONAL (para trimming determinístico)
+        # ==========================================================
+        system_core = _build_system_block(
             persona_text=persona_text,
             rolling_summary=rolling,
             spatial_context=spatial_context,
-            sexual_state_instructions=sexual_state_instructions,  # ✅ NOVO v4
+            sexual_state_instructions=sexual_state_instructions,
             scene_loc=scene_loc,
             scene_time=scene_time,
             scene_action=scene_action,
             entities_line=entities_line,
-            evidence=evidence,
+            evidence="—",  # core sem evidence/lore/temas
             prefs_line=_prefs_line(prefs),
             sensory_focus=foco,
             nsfw_block=nsfw_block,
             events_block=events_block,
-            thematic_block=thematic_block,
-            lore_block=lore_block,
+            thematic_block="",  # core sem temas
+            lore_block="",      # core sem lore
         )
 
+        # ✅ coloca memoria_pin no topo do system core
+        system_core = memoria_pin + "\n\n" + system_core
+
+        system_optional = ""
+        if evidence and evidence != "—":
+            system_optional += f"\n\nEVIDENCIA_RECENTE_DO_USUARIO:\n{evidence}"
+        if thematic_block:
+            system_optional += f"\n\nMEMÓRIA_TEMÁTICA:\n{thematic_block}"
+        if lore_block:
+            system_optional += f"\n\nLOREBOOK_RELEVANTE:\n{lore_block}"
+
+        # ==========================================================
+        # HISTÓRICO
+        # ==========================================================
         hist_msgs = self._montar_historico(
             usuario_key,
             history_boot,
@@ -1026,15 +1070,81 @@ class MaryService(BaseCharacter):
             verbatim_ultimos=int(st.session_state.get("verbatim_ultimos", 30)),
         )
 
-        messages: List[Dict[str, Any]] = [{"role": "system", "content": system_block}]
+        # ==========================================================
+        # ✅ MONTA MESSAGES + TRIMMING (determinístico)
+        # ==========================================================
+        win = _get_window_for(model)
+        hist_budget, meta_budget, safety_budget = _budget_slices(model)
+
+        # meta_budget: vamos usar como "limite suave" para system_optional
+        budget_in_soft = int(win * 0.82)  # margem de segurança p/ providers
+
+        # Tenta com optional ligado
+        messages: List[Dict[str, Any]] = [{"role": "system", "content": system_core + system_optional}]
         messages.extend(hist_msgs)
-        messages.append({"role": "system", "content": memoria_pin})
         messages.append({"role": "user", "content": prompt})
 
-        _mem_drop_warn(st.session_state.get("_mem_drop_report", {}))
+        report = {
+            "summarized_pairs": 0,
+            "trimmed_pairs": 0,
+            "hist_tokens": 0,
+            "hist_budget": hist_budget,
+        }
 
-        win = _get_window_for(model)
-        prompt_tokens = sum(toklen(m.get("content", "") or "") for m in messages)
+        def _recalc_hist_tokens(msgs: List[Dict[str, Any]]) -> int:
+            # soma aproximada só do bloco de histórico (exclui system e último user)
+            if len(msgs) <= 2:
+                return 0
+            mid = msgs[1:-1]
+            return sum(toklen(m.get("content", "") or "") for m in mid)
+
+        # A) Se estourar, derruba optional primeiro
+        if _estimate_messages_tokens(messages) > budget_in_soft:
+            messages[0]["content"] = system_core
+            report["trimmed_pairs"] += 1  # conta como 1 poda “grande”
+            # remove optional do system para garantir canônico
+            messages = [{"role": "system", "content": system_core}] + hist_msgs + [{"role": "user", "content": prompt}]
+
+        # B) Se ainda estourar, reduz histórico por pares
+        if _estimate_messages_tokens(messages) > budget_in_soft:
+            # hist_msgs é uma lista de mensagens (inclui history_boot)
+            # vamos manter history_boot e reduzir docs recentes por pares
+            # estratégia: conservar o final (mais recente)
+            candidates = [20, 12, 8, 6, 4, 2, 0]
+            for keep_pairs in candidates:
+                if keep_pairs <= 0:
+                    trimmed_hist = history_boot[:]  # só o boot
+                else:
+                    # separa boot e docs
+                    boot = history_boot[:]
+                    docs_only = [m for m in hist_msgs if m not in boot]
+                    trimmed_docs = docs_only[-keep_pairs * 2:]
+                    trimmed_hist = boot + trimmed_docs
+
+                test = [{"role": "system", "content": messages[0]["content"]}] + trimmed_hist + [{"role": "user", "content": prompt}]
+                if _estimate_messages_tokens(test) <= budget_in_soft:
+                    messages = test
+                    # quantos pares removidos?
+                    # aproximação: total pares visíveis antes - keep_pairs
+                    report["trimmed_pairs"] += 1
+                    break
+
+        # C) Modo sobrevivência (nunca quebra)
+        if _estimate_messages_tokens(messages) > budget_in_soft:
+            messages = [
+                {"role": "system", "content": system_core},
+                {"role": "user", "content": prompt},
+            ]
+            report["trimmed_pairs"] += 1
+
+        report["hist_tokens"] = _recalc_hist_tokens(messages)
+        st.session_state["_mem_drop_report"] = report
+        _mem_drop_warn(report)
+
+        # ==========================================================
+        # max_out
+        # ==========================================================
+        prompt_tokens = _estimate_messages_tokens(messages)
         max_out = _safe_max_output(win, prompt_tokens)
         if prefs.get("tamanho_resposta") == "longa":
             max_out = int(max_out * 1.35)
@@ -1057,15 +1167,36 @@ class MaryService(BaseCharacter):
 
         while True:
             iteration += 1
-            data, used_model, provider = _robust_chat_call(
-                model=model,
-                messages=messages,
-                max_tokens=max_out,
-                temperature=temperature,
-                top_p=0.95,
-                fallback_models=fallbacks,
-                tools=tools_to_use,
-            )
+            try:
+                data, used_model, provider = _robust_chat_call(
+                    model=model,
+                    messages=messages,
+                    max_tokens=max_out,
+                    temperature=temperature,
+                    top_p=0.95,
+                    fallback_models=fallbacks,
+                    tools=tools_to_use,
+                )
+            except RuntimeError as e:
+                # retry automático em overflow: system_core + user
+                s = str(e).lower()
+                if "context" in s and ("too long" in s or "maximum" in s or "length" in s):
+                    st.session_state["mary_last_model_error"] = str(e)[:300]
+                    messages = [
+                        {"role": "system", "content": system_core},
+                        {"role": "user", "content": prompt},
+                    ]
+                    data, used_model, provider = _robust_chat_call(
+                        model=model,
+                        messages=messages,
+                        max_tokens=max_out,
+                        temperature=temperature,
+                        top_p=0.95,
+                        fallback_models=fallbacks,
+                        tools=tools_to_use,
+                    )
+                else:
+                    raise
 
             msg = (data.get("choices", [{}])[0].get("message", {}) or {})
             texto = (msg.get("content") or "").strip()
@@ -1096,10 +1227,8 @@ class MaryService(BaseCharacter):
         if _detect_orgasm_in_text(texto):
             _set_sexual_state(usuario_key, "resolucao")
         elif sexual_state == "resolucao":
-            # Se já está em resolução, mantém até que haja uma nova construção de desejo
             pass
         else:
-            # Lógica simples de progressão de estado (pode ser refinada)
             if sexual_state == "desejo" and any(word in prompt.lower() for word in ["beija", "toca", "vem"]):
                 _set_sexual_state(usuario_key, "excitacao")
             elif sexual_state == "excitacao" and any(word in texto.lower() for word in ["gemido", "molhada", "duro"]):
@@ -1153,7 +1282,7 @@ class MaryService(BaseCharacter):
         verbatim_ultimos: int = 30,
     ) -> List[Dict[str, Any]]:
         docs = cached_get_history(usuario_key) or []
-        
+
         hist_msgs = []
         for msg in history_boot:
             hist_msgs.append(msg)
@@ -1180,7 +1309,7 @@ class MaryService(BaseCharacter):
             f = cached_get_facts(usuario_key) or {}
             last_ts = float(f.get("mary.rs.v2.ts", 0.0) or 0.0)
             now = time.time()
-            
+
             if now - last_ts < 300:
                 return
 
