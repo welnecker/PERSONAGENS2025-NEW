@@ -1,4 +1,4 @@
-# mary_app.py (v2 - Continuidade Espacial)
+# mary_app.py (v3 - Tema escuro + Default Chimera + Parágrafos)
 from __future__ import annotations
 
 import time
@@ -35,6 +35,133 @@ st.set_page_config(
 SENHA_CORRETA = "311071"
 DEFAULT_VISUAL_LIMIT = 80
 
+# ✅ DEFAULT DE MODELO (Mary)
+DEFAULT_MODEL = "tngtech/deepseek-r1t2-chimera:free"
+FALLBACK_MODEL = "deepseek/deepseek-chat-v3-0324"
+
+# ==========================================================
+# TEMA ESCURO (UI)
+# ==========================================================
+def _apply_dark_ui() -> None:
+    st.markdown(
+        """
+        <style>
+        /* Fundo geral */
+        .stApp {
+            background: #000 !important;
+            color: #f2f2f2 !important;
+        }
+
+        /* Sidebar */
+        section[data-testid="stSidebar"] {
+            background: #060606 !important;
+            border-right: 1px solid #141414 !important;
+        }
+
+        /* Textos */
+        html, body, [class*="css"]  {
+            color: #f2f2f2 !important;
+        }
+
+        /* Blocos / cards */
+        div[data-testid="stExpander"] {
+            background: #0a0a0a !important;
+            border: 1px solid #141414 !important;
+            border-radius: 12px !important;
+        }
+
+        /* Chat message containers */
+        div[data-testid="stChatMessage"] {
+            background: transparent !important;
+        }
+
+        /* “Bolinhas” do chat (conteúdo) */
+        div[data-testid="stChatMessage"] > div {
+            background: #0b0b0b !important;
+            border: 1px solid #1a1a1a !important;
+            border-radius: 14px !important;
+            padding: 14px 14px 10px 14px !important;
+        }
+
+        /* Parágrafos bem espaçados */
+        div[data-testid="stChatMessage"] p {
+            margin: 0 0 0.95rem 0 !important;
+            line-height: 1.55 !important;
+            font-size: 1.02rem !important;
+        }
+
+        /* Títulos e separadores */
+        hr {
+            border: none !important;
+            border-top: 1px solid #1a1a1a !important;
+        }
+
+        /* Inputs */
+        input, textarea {
+            background: #0b0b0b !important;
+            color: #f2f2f2 !important;
+            border: 1px solid #222 !important;
+        }
+
+        /* Botões */
+        button[kind="primary"] {
+            background: #1a1a1a !important;
+            border: 1px solid #2a2a2a !important;
+        }
+
+        /* Código */
+        pre, code {
+            background: #0b0b0b !important;
+            border: 1px solid #1a1a1a !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _format_paragraphs(text: str) -> str:
+    """
+    Garante leitura: se vier tudo "colado", tenta quebrar em parágrafos.
+    - Se já tem parágrafos (dupla quebra), não mexe.
+    - Caso contrário, agrupa ~2-3 frases por parágrafo.
+    """
+    t = (text or "").strip()
+    if not t:
+        return t
+
+    # Já tem parágrafos? respeita
+    if "\n\n" in t:
+        return t
+
+    # Quebra por linhas (às vezes vem com \n simples)
+    if "\n" in t and t.count("\n") >= 2:
+        # normaliza para duplo \n entre blocos
+        t2 = re.sub(r"\n{2,}", "\n\n", t)
+        # se ainda ficou sem parágrafo, segue para heurística
+        if "\n\n" in t2:
+            return t2
+        t = t2.replace("\n", " ")
+
+    # Heurística por frases
+    sentences = re.split(r"(?<=[.!?…])\s+", t)
+    sentences = [s.strip() for s in sentences if s.strip()]
+
+    if len(sentences) <= 3:
+        return t  # curto, não força
+
+    chunks = []
+    i = 0
+    while i < len(sentences):
+        # 2 frases por parágrafo; às vezes 3 para variar
+        size = 2 if (i % 6) != 4 else 3
+        chunk = " ".join(sentences[i:i+size]).strip()
+        if chunk:
+            chunks.append(chunk)
+        i += size
+
+    return "\n\n".join(chunks)
+
 
 # ==========================================================
 # SENHA
@@ -44,6 +171,8 @@ def check_password() -> bool:
         st.session_state["senha_ok"] = False
     if st.session_state["senha_ok"]:
         return True
+
+    _apply_dark_ui()
 
     st.title("🔐 Mary – Acesso Restrito")
     with st.form("form_senha", clear_on_submit=False):
@@ -65,10 +194,9 @@ if not check_password():
 
 
 # ==========================================================
-# ✅ NOVO v2: HELPER PARA EXTRAIR LOCAL
+# ✅ HELPER PARA EXTRAIR LOCAL
 # ==========================================================
 def _extract_location_from_text(text: str) -> str | None:
-    """Extrai o local mencionado em um texto."""
     locations = {
         "cozinha": ["cozinha", "geladeira", "fogão", "pia da cozinha", "panela"],
         "quarto": ["quarto", "cama", "lençol", "colchão", "criado-mudo", "guarda-roupa"],
@@ -100,7 +228,6 @@ def _invalidate_backend_cache() -> None:
 
 
 def _keys_para_mary() -> list[str]:
-    """Chave nova + chave legada."""
     usuario_key = _current_user_key()  # ex: Janio::mary
     usuario_legado = str(st.session_state.get("user_id") or "").strip()  # ex: Janio
     keys = [usuario_key]
@@ -115,17 +242,36 @@ def _on_user_change() -> None:
     _invalidate_backend_cache()
 
 
+def _choose_default_model(available: list[str]) -> str:
+    if available and DEFAULT_MODEL in available:
+        return DEFAULT_MODEL
+    if available:
+        # Se não tiver Chimera listado, tenta evitar “grok” como default
+        non_grok = [m for m in available if "grok" not in (m or "").lower()]
+        return (non_grok[0] if non_grok else available[0])
+    return FALLBACK_MODEL
+
+
 def _garantir_estado_inicial() -> None:
     if "user_id" not in st.session_state or not st.session_state["user_id"]:
         st.session_state["user_id"] = "Janio"
     if "chat_history" not in st.session_state:
         st.session_state["chat_history"] = []
-    if "model" not in st.session_state:
-        try:
-            modelos = list_models() or []
-        except Exception:
-            modelos = []
-        st.session_state["model"] = modelos[0] if modelos else "deepseek/deepseek-chat-v3-0324"
+
+    # ✅ garante lista de modelos
+    try:
+        modelos = list_models() or []
+    except Exception:
+        modelos = []
+
+    # ✅ modelo default correto e persistente
+    if "model" not in st.session_state or not st.session_state["model"]:
+        st.session_state["model"] = _choose_default_model(modelos)
+    else:
+        # se por algum motivo ficou em grok, puxa pro default
+        if "grok" in str(st.session_state["model"]).lower():
+            st.session_state["model"] = _choose_default_model(modelos)
+
     if "mary_nsfw_on" not in st.session_state:
         st.session_state["mary_nsfw_on"] = True
     if "mary_intro_done" not in st.session_state:
@@ -149,10 +295,6 @@ def _tem_historico_no_backend(keys: list[str]) -> bool:
 
 
 def _gerar_fala_inicial_e_salvar_backend() -> str:
-    """
-    ✅ v2: Extrai o local da mensagem de boot e o persiste em cena.local.
-    """
-    # pega a primeira mensagem do boot da persona
     try:
         _, history_boot = get_persona()
     except Exception:
@@ -168,21 +310,17 @@ def _gerar_fala_inicial_e_salvar_backend() -> str:
     if not intro:
         intro = "Oi… eu tô aqui. Vamos começar do zero, do jeito certo."
 
-    # ✅ NOVO v2: Extrai e persiste o local da fala inicial
     try:
         keys = _keys_para_mary()
         usuario_key = keys[0]
-        
-        # Extrai o local mencionado na intro
+
         initial_location = _extract_location_from_text(intro)
         if initial_location:
-            # Persiste o local ANTES de salvar a interação
             _persist_scene_basics(usuario_key, initial_location, "agora", "início de cena")
-        
-        # SEMPRE gera fala inicial nova quando mary_intro_done é False
+
         if not st.session_state.get("mary_intro_done", False):
             save_interaction(usuario_key, "[FALA_INICIAL_MARY]", intro, "mary-persona-static")
-            
+
     except Exception as e:
         st.error(f"⚠️ Erro ao salvar fala inicial: {e}")
 
@@ -225,7 +363,6 @@ def _carregar_chat_visual_do_backend(force: bool = False) -> list[tuple[str, str
 
 
 def _apagar_hist_bd_novo_e_legado() -> int:
-    """APAGA DE VERDADE o histórico (coleção history), novo + legado."""
     keys = _keys_para_mary()
     total = 0
     for k in keys:
@@ -254,7 +391,6 @@ def _diagnostico_hist(keys: list[str]) -> dict:
 
 
 def _apagar_eventos_mary_fact(usuario_key: str) -> int:
-    """Apaga facts mary.evento.* (um por um)."""
     try:
         facts = get_facts(usuario_key) or {}
     except Exception:
@@ -275,18 +411,18 @@ def _apagar_eventos_mary_fact(usuario_key: str) -> int:
 # APP
 # ==========================================================
 def main() -> None:
+    _apply_dark_ui()
     _garantir_estado_inicial()
     svc = _get_service()
 
-    # ✅ IDENTIFICADOR DE VERSÃO
-    st.success("✅ ESTE É O mary_app.py v2 (Continuidade Espacial) QUE ESTÁ RODANDO AGORA.")
+    st.caption("🧩 mary_app.py v3 (Tema escuro + default Chimera + parágrafos)")
 
     backend, detail = db_status()
     st.caption(f"🗄️ Backend atual: **{backend}** ({detail})")
 
     st.title("Mary – Esposa Cúmplice 💍💍")
 
-    # ====== BOTÕES DE BACKEND (NA TELA, NÃO NA SIDEBAR) ======
+    # ====== BOTÕES DE BACKEND ======
     keys = _keys_para_mary()
     with st.expander("🧨 BACKEND — apagar histórico de verdade + diagnóstico", expanded=False):
         st.write("Chaves usadas (novo + legado):", keys)
@@ -330,12 +466,22 @@ def main() -> None:
         except Exception:
             all_models = []
         if not all_models:
-            all_models = ["deepseek/deepseek-chat-v3-0324"]
+            all_models = [FALLBACK_MODEL]
+
+        # ✅ garante que o estado atual existe na lista
+        if st.session_state.get("model") not in all_models:
+            st.session_state["model"] = _choose_default_model(all_models)
+
+        # ✅ selectbox com default Chimera (se disponível)
+        default_idx = all_models.index(DEFAULT_MODEL) if DEFAULT_MODEL in all_models else 0
+        current = st.session_state.get("model")
+        if current in all_models:
+            default_idx = all_models.index(current)
 
         st.selectbox(
             "🧠 Modelo",
             all_models,
-            index=all_models.index(st.session_state["model"]) if st.session_state["model"] in all_models else 0,
+            index=default_idx,
             key="model",
         )
 
@@ -345,7 +491,6 @@ def main() -> None:
         st.markdown("---")
         st.subheader("Turnos")
         if st.button("Apagar último turno (backend)"):
-            # tenta no novo; se falhar e tiver legado, tenta no legado
             ks = _keys_para_mary()
             ok = False
             try:
@@ -369,10 +514,10 @@ def main() -> None:
 
         st.markdown("---")
         st.subheader("🎭 Persona")
-        
+
         st.caption("Arquivo ativo:")
         st.code(inspect.getfile(mary_persona.get_persona))
-        
+
         if st.button("♻️ Recarregar persona AGORA"):
             importlib.reload(mary_persona)
             st.session_state.pop("_mary_service", None)
@@ -400,7 +545,10 @@ def main() -> None:
 
     for role, content in visible:
         with st.chat_message(role):
-            st.markdown(content)
+            if role == "assistant":
+                st.markdown(_format_paragraphs(content))
+            else:
+                st.markdown(content)
 
     # ===== INPUT =====
     prompt = st.chat_input("Fala algo pra Mary...")
@@ -412,12 +560,12 @@ def main() -> None:
         st.session_state["chat_input"] = prompt
         resposta = svc.reply(
             user=st.session_state.get("user_id", "Janio"),
-            model=st.session_state.get("model"),
+            model=st.session_state.get("model") or DEFAULT_MODEL,
         )
         st.session_state["chat_input"] = ""
 
         with st.chat_message("assistant"):
-            st.markdown(resposta)
+            st.markdown(_format_paragraphs(resposta))
 
         st.session_state["chat_history"].append(("assistant", resposta))
         _invalidate_backend_cache()
