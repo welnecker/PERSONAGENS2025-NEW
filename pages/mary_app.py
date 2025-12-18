@@ -184,8 +184,13 @@ def _garantir_estado_inicial() -> None:
     if "model" not in st.session_state or not st.session_state["model"]:
         st.session_state["model"] = _choose_default_model(modelos)
     else:
-        if "grok" in str(st.session_state["model"]).lower():
+        if "model" not in st.session_state or not st.session_state["model"]:
+        st.session_state["model"] = _choose_default_model(modelos)
+    else:
+        # se o modelo escolhido não existe mais na lista, volta pro default
+        if modelos and st.session_state["model"] not in modelos:
             st.session_state["model"] = _choose_default_model(modelos)
+
 
     if "mary_nsfw_on" not in st.session_state:
         st.session_state["mary_nsfw_on"] = True
