@@ -184,9 +184,6 @@ def _garantir_estado_inicial() -> None:
     if "model" not in st.session_state or not st.session_state["model"]:
         st.session_state["model"] = _choose_default_model(modelos)
     else:
-        if "model" not in st.session_state or not st.session_state["model"]:
-        st.session_state["model"] = _choose_default_model(modelos)
-    else:
         # se o modelo escolhido não existe mais na lista, volta pro default
         if modelos and st.session_state["model"] not in modelos:
             st.session_state["model"] = _choose_default_model(modelos)
