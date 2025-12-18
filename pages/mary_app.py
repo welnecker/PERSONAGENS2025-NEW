@@ -510,17 +510,28 @@ def main() -> None:
         if st.button("Apagar último turno (backend)"):
             ks = _keys_para_mary()
             ok = False
+        
             try:
-                ok = delete_last_interaction(ks[0])
+                ok = bool(delete_last_interaction(ks[0]))
             except Exception as e:
                 st.error(f"Erro apagar último (novo): {e}")
-            if not ok and len(ks) > 1:
+        
+            if (not ok) and len(ks) > 1:
                 try:
-                    ok = delete_last_interaction(ks[1])
+                    ok = bool(delete_last_interaction(ks[1]))
                 except Exception as e:
                     st.error(f"Erro apagar último (legado): {e}")
+        
+            # ✅ IMPORTANTÍSSIMO: refletir no visual
             _invalidate_backend_cache()
-            st.success("OK" if ok else "Nada para apagar.")
+        
+            if ok:
+                # opção A (mais correta): recarrega do backend imediatamente
+                st.session_state["chat_history"] = _carregar_chat_visual_do_backend(force=True)
+                st.success("✅ Último turno apagado e tela atualizada.")
+            else:
+                st.warning("Nada para apagar (backend não retornou sucesso).")
+        
             st.rerun()
 
         st.markdown("---")
