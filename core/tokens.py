@@ -6,6 +6,42 @@ from typing import Optional
 # Cache simples do encoder
 _TIKTOKEN_ENCODER = None
 
+_TIKTOKEN_ENCODER = None
+
+def _get_encoder(model: str | None = None):
+    global _TIKTOKEN_ENCODER
+    try:
+        import tiktoken
+        if model:
+            try:
+                return tiktoken.encoding_for_model(model)
+            except Exception:
+                pass
+        if _TIKTOKEN_ENCODER is None:
+            _TIKTOKEN_ENCODER = tiktoken.get_encoding("cl100k_base")
+        return _TIKTOKEN_ENCODER
+    except Exception:
+        return None
+
+
+def toklen(txt: str, model: str | None = None) -> int:
+    t = (txt or "")
+    if not t.strip():
+        return 1
+
+    enc = _get_encoder(model)
+    if enc is not None:
+        try:
+            return max(1, len(enc.encode(t)))
+        except Exception:
+            pass
+
+    # fallback robusto
+    chars_est = int(len(t) / 4.0)
+    words_est = int(len(t.split()) * 1.3)
+    return max(1, max(chars_est, words_est))
+
+
 def _get_encoder(model: Optional[str] = None):
     """
     Retorna um encoder do tiktoken.
