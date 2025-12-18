@@ -1,23 +1,24 @@
-# mary_app.py
+# mary_app.py (v2 - Continuidade Espacial)
 from __future__ import annotations
 
 import time
 import streamlit as st
 import importlib
 import inspect
+import re
 
-import characters.mary.persona as mary_persona # ✅ SEM DOIS PONTOS
-from characters.mary.service import MaryService, _current_user_key
+import characters.mary.persona as mary_persona
+from characters.mary.service import MaryService, _current_user_key, _persist_scene_basics
 from characters.mary.persona import get_persona
 from core.service_router import list_models
-from core.database import db_status  # ✅ diagnóstico do backend
+from core.database import db_status
 from core.repositories import (
     save_interaction,
     get_history_docs,
     get_history_docs_multi,
     get_facts,
     set_fact,
-    delete_fact,              # ✅ apagar facts específicos (mary.evento.*)
+    delete_fact,
     delete_last_interaction,
     delete_user_history,
 )
@@ -61,6 +62,25 @@ def check_password() -> bool:
 
 if not check_password():
     st.stop()
+
+
+# ==========================================================
+# ✅ NOVO v2: HELPER PARA EXTRAIR LOCAL
+# ==========================================================
+def _extract_location_from_text(text: str) -> str | None:
+    """Extrai o local mencionado em um texto."""
+    locations = {
+        "cozinha": ["cozinha", "geladeira", "fogão", "pia da cozinha", "panela"],
+        "quarto": ["quarto", "cama", "lençol", "colchão", "criado-mudo", "guarda-roupa"],
+        "banheiro": ["banheiro", "espelho", "pia do banheiro", "chuveiro", "banheira"],
+        "sala": ["sala", "sofá", "sofa", "televisão", "estante"],
+        "corredor": ["corredor", "hall"],
+    }
+    text_lower = text.lower()
+    for location, keywords in locations.items():
+        if any(kw in text_lower for kw in keywords):
+            return location
+    return None
 
 
 # ==========================================================
@@ -129,6 +149,9 @@ def _tem_historico_no_backend(keys: list[str]) -> bool:
 
 
 def _gerar_fala_inicial_e_salvar_backend() -> str:
+    """
+    ✅ v2: Extrai o local da mensagem de boot e o persiste em cena.local.
+    """
     # pega a primeira mensagem do boot da persona
     try:
         _, history_boot = get_persona()
@@ -145,15 +168,23 @@ def _gerar_fala_inicial_e_salvar_backend() -> str:
     if not intro:
         intro = "Oi… eu tô aqui. Vamos começar do zero, do jeito certo."
 
-    # salva intro só se NÃO houver histórico
+    # ✅ NOVO v2: Extrai e persiste o local da fala inicial
     try:
         keys = _keys_para_mary()
+        usuario_key = keys[0]
+        
+        # Extrai o local mencionado na intro
+        initial_location = _extract_location_from_text(intro)
+        if initial_location:
+            # Persiste o local ANTES de salvar a interação
+            _persist_scene_basics(usuario_key, initial_location, "agora", "início de cena")
+        
         # SEMPRE gera fala inicial nova quando mary_intro_done é False
         if not st.session_state.get("mary_intro_done", False):
-            save_interaction(keys[0], "[FALA_INICIAL_MARY]", intro, "mary-persona-static")
-
-    except Exception:
-        pass
+            save_interaction(usuario_key, "[FALA_INICIAL_MARY]", intro, "mary-persona-static")
+            
+    except Exception as e:
+        st.error(f"⚠️ Erro ao salvar fala inicial: {e}")
 
     return intro
 
@@ -247,8 +278,8 @@ def main() -> None:
     _garantir_estado_inicial()
     svc = _get_service()
 
-    # ✅ PROVA ABSOLUTA do arquivo em execução
-    st.error("✅ ESTE É O mary_app.py QUE ESTÁ RODANDO AGORA. Se você não está vendo esta faixa vermelha, você NÃO está executando este arquivo.")
+    # ✅ IDENTIFICADOR DE VERSÃO
+    st.success("✅ ESTE É O mary_app.py v2 (Continuidade Espacial) QUE ESTÁ RODANDO AGORA.")
 
     backend, detail = db_status()
     st.caption(f"🗄️ Backend atual: **{backend}** ({detail})")
@@ -257,10 +288,10 @@ def main() -> None:
 
     # ====== BOTÕES DE BACKEND (NA TELA, NÃO NA SIDEBAR) ======
     keys = _keys_para_mary()
-    with st.expander("🧨 BACKEND — apagar histórico de verdade + diagnóstico", expanded=True):
+    with st.expander("🧨 BACKEND — apagar histórico de verdade + diagnóstico", expanded=False):
         st.write("Chaves usadas (novo + legado):", keys)
 
-        if st.button("🔎 Diagnóstico agora (mostrar de onde vem o 'banheiro')"):
+        if st.button("🔎 Diagnóstico agora"):
             st.json(_diagnostico_hist(keys))
 
         colA, colB = st.columns(2)
@@ -392,4 +423,5 @@ def main() -> None:
         _invalidate_backend_cache()
 
 
-main()
+if __name__ == "__main__":
+    main()
