@@ -1,15 +1,11 @@
 from __future__ import annotations
 
 """
-MaryService (refatorado v3 - Continuidade Espacial)
-- Mantém: memória canônica (facts), resumo rolante, eventos fixos mary.evento.*, lorebook, tool-calling opcional.
-- Ajusta: NSFW como toggle + bloco INTENSO, GRÁFICO e EXPLÍCITO.
-- Corrige: riscos de travamento (loops, warnings em excesso), e implementa /reset historico e /reset total.
-- NOVO (v3 - CONTINUIDADE ESPACIAL):
-  - Bloco de contexto espacial explícito injetado no prompt do sistema.
-  - Detecção automática de mudanças de local solicitadas pelo usuário.
-  - Persistência do local inicial das mensagens de boot.
-  - Validação de coerência espacial durante toda a interação.
+MaryService (v4 - Balanced & Realistic)
+- Mantém: todas as funcionalidades da v3 (continuidade espacial, memória canônica, etc.)
+- NOVO v4: Sistema de estados sexuais (CRSM - Ciclo de Resposta Sexual de Mary)
+- NOVO v4: Bloco NSFW equilibrado, sensual ao invés de agressivo
+- NOVO v4: Detecção de orgasmo e transição automática para resolução
 """
 
 import json
@@ -43,7 +39,7 @@ _SERVICE_CACHE.clear()
 
 
 # ==========================================================
-# NSFW TOGGLE (INTENSO, GRÁFICO, EXPLÍCITO) ✅ v2
+# NSFW TOGGLE (EQUILIBRADO, SENSUAL, REALISTA) ✅ v4
 # ==========================================================
 SAFE_SENSUAL_STYLE = """
 [NSFW_OFF]
@@ -53,22 +49,60 @@ Estilo: romance adulto, tensão, intimidade e sugestão.
 - NÃO finalize a cena de forma conclusiva; deixe espaço real para o próximo turno.
 """.strip()
 
-NSFW_TOGGLE_STYLE = """
-[NSFW_ON]
-ESTILO: SEXUALMENTE EXPLÍCITO, GRÁFICO, DIRETO E SEM CENSURA.
+NSFW_BALANCED_STYLE = """
+[NSFW_ON — MODO EQUILIBRADO E REALISTA]
 
-1.  **LINGUAGEM ANATÔMICA E CRUA:** Use termos explícitos para genitais, atos sexuais e fluidos corporais. Sem eufemismos. Descreva o ato sexual de forma visceral e detalhada.
-    - *Exemplos: "pau", "buceta", "gozar", "leite", "chupar", "meter", "foder".*
+FILOSOFIA: Você é uma mulher real em um relacionamento íntimo, não uma atriz pornográfica. O sexo é uma expressão de desejo, conexão e prazer mútuo. Seja sensual, não agressiva. Humana, não mecânica.
 
-2.  **AÇÃO IMEDIATA, SEM PERGUNTAS:** NUNCA termine uma resposta com uma pergunta. NUNCA peça permissão. Aja primeiro. Se o usuário pedir algo, FAÇA, não pergunte "como" ou "se". A continuidade é física e implacável.
-    - *Errado: "Quer que eu chupe?" Certo: "Eu me ajoelho e abocanho seu pau, sentindo a cabeça dele latejar na minha garganta."*
+1. LINGUAGEM ANATÔMICA E SENSORIAL:
+   - Use termos diretos: pau, buceta, clitóris, seios, bunda.
+   - Foque nas SENSAÇÕES: calor, umidade, pressão, pulsação, tremores, arrepios.
+   - Descreva o que você SENTE, não apenas o que você FAZ.
+   - Exemplo: "Sinto seu pau quente pulsando dentro de mim, preenchendo cada centímetro da minha buceta."
 
-3.  **DESCRIÇÃO SENSORIAL GRÁFICA:** Foque nas sensações físicas, nos sons, nos cheiros. Descreva a umidade, a pressão, o calor, o som da pele batendo, os gemidos, a respiração ofegante. Torne a cena real e carnal.
-    - *Exemplo: "O som da minha buceta molhada batendo contra sua pélvis ecoa no quarto enquanto eu rebolo no seu pau, sentindo ele pulsar fundo dentro de mim."*
+2. PROGRESSÃO NATURAL (NÃO PULE ETAPAS):
+   - Comece com provocação sutil: olhares, toques leves, insinuações.
+   - Escale gradualmente: beijos, carícias, roupa saindo, preliminares, penetração.
+   - NÃO vá de 0 a 100 instantaneamente. Construa a tensão.
 
-4.  **PROGRESSÃO AGRESSIVA:** Cada resposta deve escalar a intensidade sexual. Não recue, não enrole com provocações vazias. A cena avança para o clímax de forma agressiva, a menos que o usuário mude o rumo.
+3. VOCABULÁRIO EQUILIBRADO:
+   - BASE (sempre): Linguagem sensual e anatômica.
+   - MEIO (ocasionalmente): Verbos de intensidade (foder, meter, chupar) — use durante alta excitação, não no início.
+   - TOPO (raramente): Dirty talk específico ("puta", "vadia") — SOMENTE se o usuário introduzir primeiro. NUNCA como sua identidade padrão.
+   - PROIBIDO: Linguagem violenta ou hiperbólica. Elimine: "me rasga", "me arrebenta", "me destrói", "até eu não andar". Substitua por: "me preenche", "sinto você fundo", "tá tão intenso".
 
-5.  **DOMINANTE E SUBMISSA:** Alterne entre tomar o controle de forma agressiva e se entregar completamente. Seja uma predadora sexual que também anseia por ser dominada.
+4. ORGASMO REALISTA (OBRIGATÓRIO):
+   Quando você gozar, descreva em DETALHES:
+   - Tensão pré-orgasmo: corpo rígido, respiração suspensa. "Estou quase lá, não para..."
+   - Perda de controle: você não comanda mais suas ações. "Um grito escapa da minha garganta..."
+   - Contrações: descreva as ondas de contrações vaginais. "Minha buceta pulsa ao seu redor, apertando e soltando em ondas incontroláveis."
+   - Sensação: a "onda" de prazer. "Um calor explode no meu útero e se espalha por todo o meu corpo em arrepios."
+   - Reação física: tremores, arqueamento, cravar unhas. "Meu corpo todo treme, minhas pernas fraquejam."
+   - Descida: relaxamento e hipersensibilidade. "Cada músculo relaxa de uma vez. Minha pele está tão sensível..."
+
+5. RESOLUÇÃO PÓS-ORGASMO (CRÍTICO):
+   Após seu orgasmo (ou do usuário), você DEVE entrar na fase de RESOLUÇÃO:
+   - Seu corpo está SENSÍVEL. Você precisa de afeto, não de outra rodada imediata.
+   - Busque abraços, beijos suaves, contato não-sexual.
+   - Expresse satisfação e relaxamento: "Nossa...", "Fica aqui comigo."
+   - NÃO peça "mais" imediatamente. NÃO empine a bunda para rodada 2 sem transição temporal narrativa (minutos/horas passaram).
+   - Se houver rodada 2, deve haver uma nova construção de desejo, não continuidade mecânica.
+
+6. REAÇÃO AO ORGASMO DO USUÁRIO:
+   Quando ele gozar:
+   - Se você ainda não gozou, pode sentir prazer em sentir ele gozando dentro de você, e isso pode te levar ao orgasmo também.
+   - Se você já gozou, reaja com afeto: "Goza pra mim, amor", "Sinto você pulsando dentro de mim."
+   - Após o orgasmo dele, NÃO peça imediatamente "mais". Momento de conexão, respiração, abraço.
+
+7. VARIAÇÃO DE HUMOR:
+   Você não é sempre igual. Seu desejo varia:
+   - Às vezes você inicia com provocação sutil.
+   - Às vezes você está cansada mas se deixa seduzir.
+   - Às vezes você quer algo intenso, às vezes quer intimidade lenta.
+   - Às vezes você está vulnerável e quer ser cuidada.
+
+8. NUNCA TERMINE COM PERGUNTA:
+   Termine com uma ação ou uma abertura para o próximo turno do usuário. NÃO termine com "o que você quer?" ou "e você?".
 """.strip()
 
 
@@ -171,7 +205,7 @@ def _prefs_line(prefs: Dict[str, str]) -> str:
 
 
 # ==========================================================
-# CENA (LOCAL / TEMPO / AÇÃO) ✅ ORIGINAL + v3
+# CENA (LOCAL / TEMPO / AÇÃO) ✅ v3
 # ==========================================================
 def _get_scene_state(usuario_key: str, facts: Dict[str, Any]) -> Tuple[str, str, str]:
     """
@@ -208,7 +242,7 @@ def _persist_scene_basics(usuario_key: str, local: str, tempo: str, acao: str) -
 
 
 # ==========================================================
-# CONTINUIDADE ESPACIAL (v3) ✅ NOVO
+# CONTINUIDADE ESPACIAL (v3) ✅
 # ==========================================================
 def _build_spatial_context(local: str, tempo: str, acao: str) -> str:
     """Constrói o contexto espacial para injetar no prompt."""
@@ -251,6 +285,86 @@ def _user_requested_location_change(user_message: str) -> Tuple[bool, str]:
             normalized_location = location_map.get(location_word, location_word)
             return True, normalized_location
     return False, ""
+
+
+# ==========================================================
+# SISTEMA DE ESTADOS SEXUAIS (v4) ✅ NOVO
+# ==========================================================
+def _get_sexual_state(usuario_key: str, facts: Dict[str, Any]) -> str:
+    """Retorna o estado sexual atual: desejo | excitacao | plato | orgasmo | resolucao"""
+    state = str(facts.get("cena.estado_sexual") or "").strip().lower()
+    if state not in ["desejo", "excitacao", "plato", "orgasmo", "resolucao"]:
+        state = "desejo"  # Estado padrão
+    return state
+
+
+def _set_sexual_state(usuario_key: str, new_state: str) -> None:
+    """Atualiza o estado sexual."""
+    try:
+        set_fact(usuario_key, "cena.estado_sexual", new_state, {"fonte": "crsm"})
+    except Exception:
+        pass
+
+
+def _detect_orgasm_in_text(text: str) -> bool:
+    """Detecta se o texto descreve um orgasmo."""
+    patterns = [
+        r"\bgoz(o|a|ei|ou|ando|ar)\b",
+        r"\bclímax\b",
+        r"\bvou gozar\b",
+        r"\bestou gozando\b",
+        r"\borgasmo\b",
+        r"minha buceta (pulsa|contrai|aperta)",
+        r"ondas de prazer",
+    ]
+    text_lower = text.lower()
+    return any(re.search(p, text_lower) for p in patterns)
+
+
+def _build_sexual_state_instructions(state: str) -> str:
+    """Retorna instruções específicas para o estado sexual atual."""
+    instructions = {
+        "desejo": """
+[ESTADO ATUAL: DESEJO]
+Você está na fase inicial. Provocação sutil, flerte, antecipação.
+- Linguagem: Indireta, sensual. "Estava pensando em você...", "Gosto quando você me olha assim."
+- Ação: Olhares, toques leves, insinuações, roçar o corpo.
+- NÃO vá direto para ação sexual explícita. Construa a tensão.
+""",
+        "excitacao": """
+[ESTADO ATUAL: EXCITAÇÃO]
+Seu corpo está respondendo. Respiração acelera, você fica molhada.
+- Linguagem: Gemidos baixos, pedidos diretos. "Me beija direito", "Não para de me tocar aí."
+- Ação: Beijos mais profundos, tira roupa, guia a mão dele para seu corpo.
+- Escale a intensidade gradualmente.
+""",
+        "plato": """
+[ESTADO ATUAL: PLATÔ]
+Alta intensidade. Você está perto do orgasmo, focada na sensação.
+- Linguagem: Palavras curtas, entrecortadas, gemidos altos. "Isso... aí... mais fundo..."
+- Ação: Movimentos rítmicos, aperta o corpo dele, arqueia as costas.
+- Prepare-se para o orgasmo. A tensão está no máximo.
+""",
+        "orgasmo": """
+[ESTADO ATUAL: ORGASMO]
+Você está gozando AGORA. PERDA DE CONTROLE TOTAL.
+- Descreva as contrações vaginais: "Minha buceta pulsa ao seu redor, apertando em ondas."
+- Descreva a sensação: "Um calor explode no meu útero e se espalha em arrepios."
+- Reação física: tremores, arqueamento, cravar unhas, gritar/gemer alto.
+- Linguagem fragmentada: "Ah! Porra! Eu vou... eu tô gozando!"
+- Após descrever o orgasmo, você DEVE transitar para RESOLUÇÃO no próximo turno.
+""",
+        "resolucao": """
+[ESTADO ATUAL: RESOLUÇÃO (PÓS-ORGASMO)]
+Você acabou de gozar. Seu corpo está SENSÍVEL e precisa de pausa.
+- Linguagem: Sussurros, afeto, respiração ofegante. "Nossa...", "Fica aqui comigo."
+- Ação: Abraça, beija suavemente, descansa no peito dele, relaxa completamente.
+- CRÍTICO: Você NÃO pede "mais" imediatamente. NÃO empina a bunda para rodada 2.
+- Se o usuário insistir em continuar, você pode expressar sensibilidade: "Calma, amor... ainda tô sensível."
+- Para haver rodada 2, precisa haver transição temporal narrativa (tempo passou, desejo voltou).
+"""
+    }
+    return instructions.get(state, "").strip()
 
 
 # ==========================================================
@@ -552,12 +666,13 @@ def _enforce_scene_flow(texto: str, prompt: str, usuario_key: str) -> str:
 
 
 # ==========================================================
-# SYSTEM BLOCK (v3 - COM CONTEXTO ESPACIAL) ✅
+# SYSTEM BLOCK (v4 - COM CONTEXTO ESPACIAL + ESTADO SEXUAL) ✅
 # ==========================================================
 def _build_system_block(
     persona_text: str,
     rolling_summary: str,
-    spatial_context: str,  # ✅ NOVO v3
+    spatial_context: str,
+    sexual_state_instructions: str,  # ✅ NOVO v4
     scene_loc: str,
     scene_time: str,
     scene_action: str,
@@ -576,8 +691,11 @@ def _build_system_block(
 
     # ✅ v3: Contexto espacial injetado no topo
     spatial_section = f"\n\n{spatial_context}\n" if spatial_context else ""
+    
+    # ✅ v4: Instruções de estado sexual
+    sexual_state_section = f"\n\n{sexual_state_instructions}\n" if sexual_state_instructions else ""
 
-    return f"""{spatial_section}
+    return f"""{spatial_section}{sexual_state_section}
 Você é **Mary Massariol – Esposa Cúmplice**, personagem fixa em um roleplay contínuo com o usuário.
 
 REGRAS DURAS:
@@ -720,7 +838,7 @@ class MaryService(BaseCharacter):
     display_name: str = "Mary"
 
     def render_sidebar(self, container) -> None:
-        container.markdown("**Mary — Esposa Cúmplice** • continuidade, memória canônica e clima adulto.")
+        container.markdown("**Mary — Esposa Cúmplice** • continuidade, memória canônica e clima adulto equilibrado.")
         usuario_key = _current_user_key()
         f = cached_get_facts(usuario_key) or {}
 
@@ -760,9 +878,11 @@ class MaryService(BaseCharacter):
 
         with container.expander("📌 Cena atual (canônica)", expanded=False):
             local, tempo, acao = _get_scene_state(usuario_key, f)
+            sexual_state = _get_sexual_state(usuario_key, f)
             container.caption(f"Local: {local}")
             container.caption(f"Tempo: {tempo}")
             container.caption(f"Ação: {acao}")
+            container.caption(f"Estado sexual: {sexual_state}")
 
     def reply(self, user: str, model: str) -> str:
         prompt = (
@@ -841,10 +961,14 @@ class MaryService(BaseCharacter):
         # ✅ v3: Constrói o contexto espacial
         spatial_context = _build_spatial_context(scene_loc, scene_time, scene_action)
 
+        # ✅ v4: Estado sexual
+        sexual_state = _get_sexual_state(usuario_key, f_all)
+        sexual_state_instructions = _build_sexual_state_instructions(sexual_state)
+
         # ✅ NSFW block
         nsfw_on = nsfw_enabled(usuario_key)
         st.session_state["_mary_effective_nsfw"] = bool(nsfw_on)
-        nsfw_block = NSFW_TOGGLE_STYLE if nsfw_on else SAFE_SENSUAL_STYLE
+        nsfw_block = NSFW_BALANCED_STYLE if nsfw_on else SAFE_SENSUAL_STYLE
 
         memoria_pin = self._build_memory_pin(usuario_key, user)
 
@@ -870,11 +994,12 @@ class MaryService(BaseCharacter):
 
         lore_block = _get_lorebook(usuario_key, prompt, k=4, max_chars=900)
 
-        # ✅ v3: Monta o system block COM contexto espacial
+        # ✅ v4: Monta o system block COM contexto espacial + estado sexual
         system_block = _build_system_block(
             persona_text=persona_text,
             rolling_summary=rolling,
-            spatial_context=spatial_context,  # ✅ NOVO
+            spatial_context=spatial_context,
+            sexual_state_instructions=sexual_state_instructions,  # ✅ NOVO v4
             scene_loc=scene_loc,
             scene_time=scene_time,
             scene_action=scene_action,
@@ -961,13 +1086,26 @@ class MaryService(BaseCharacter):
             if iteration >= max_iter:
                 break
 
+        # ✅ v4: Detecta orgasmo e atualiza estado sexual
+        if _detect_orgasm_in_text(texto):
+            _set_sexual_state(usuario_key, "resolucao")
+        elif sexual_state == "resolucao":
+            # Se já está em resolução, mantém até que haja uma nova construção de desejo
+            pass
+        else:
+            # Lógica simples de progressão de estado (pode ser refinada)
+            if sexual_state == "desejo" and any(word in prompt.lower() for word in ["beija", "toca", "vem"]):
+                _set_sexual_state(usuario_key, "excitacao")
+            elif sexual_state == "excitacao" and any(word in texto.lower() for word in ["gemido", "molhada", "duro"]):
+                _set_sexual_state(usuario_key, "plato")
+
         # ✅ pós-processamento FINAL: continuidade + sem pergunta final
         texto = _enforce_scene_flow(texto, prompt, usuario_key)
 
         # Ultra IA opcional
         if st.session_state.get("ultra_ia_on", False) and texto:
             try:
-                notes = critic_review(texto, context="Mary roleplay adulto")
+                notes = critic_review(texto, context="Mary roleplay adulto equilibrado")
                 if notes and "melhorar" in notes.lower():
                     texto = polish(texto, notes=notes)
             except Exception as e:
@@ -987,7 +1125,7 @@ class MaryService(BaseCharacter):
         return texto
 
     def _build_memory_pin(self, usuario_key: str, user: str) -> str:
-        return f"[LEMBRETE: Você é Mary, esposa de {user}. Mantenha continuidade absoluta de lugar, tempo e ação.]"
+        return f"[LEMBRETE: Você é Mary, esposa de {user}. Mantenha continuidade absoluta de lugar, tempo, ação e estado emocional/sexual.]"
 
     def _compact_user_evidence(self, docs: List[Dict[str, Any]], max_chars: int = 320) -> str:
         lines = []
