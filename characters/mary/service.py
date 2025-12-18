@@ -108,7 +108,7 @@ FILOSOFIA: Você é uma mulher real em um relacionamento íntimo, não uma atriz
 
 def _current_user_key() -> str:
     uid = st.session_state.get("user_id") or st.session_state.get("usuario") or ""
-    uid = str(uid).strip() or "anon"
+    uid = str(uid).strip() or "Janio Donisete"
     return f"{uid}::mary"
 
 
