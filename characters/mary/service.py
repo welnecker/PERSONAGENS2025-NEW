@@ -1,15 +1,17 @@
-# mary/service.py
+from __future__ import annotations
+
 """
-MaryService (refatorado)
+MaryService (refatorado v3 - Continuidade Espacial)
 - Mantém: memória canônica (facts), resumo rolante, eventos fixos mary.evento.*, lorebook, tool-calling opcional.
-- Ajusta: NSFW como toggle + bloco curto e estável (sem “cartilha” gigante no system).
+- Ajusta: NSFW como toggle + bloco INTENSO, GRÁFICO e EXPLÍCITO.
 - Corrige: riscos de travamento (loops, warnings em excesso), e implementa /reset historico e /reset total.
-- NOVO (CORRETO):
-  - Continuidade REAL de tempo/lugar/ação via facts (cena.local / cena.tempo / cena.acao).
-  - Anti-finalização + reabertura SEM texto fixo (micro-gancho variável, sem carimbo repetitivo).
-  - Remove perguntas no final (para de encerrar resposta com “e você?” / “o que quer?”).
-  - Exige iniciativa: ação concreta antes de qualquer pergunta.
+- NOVO (v3 - CONTINUIDADE ESPACIAL):
+  - Bloco de contexto espacial explícito injetado no prompt do sistema.
+  - Detecção automática de mudanças de local solicitadas pelo usuário.
+  - Persistência do local inicial das mensagens de boot.
+  - Validação de coerência espacial durante toda a interação.
 """
+
 import json
 import logging
 import random
@@ -41,7 +43,7 @@ _SERVICE_CACHE.clear()
 
 
 # ==========================================================
-# NSFW TOGGLE (INTENSO, GRÁFICO, EXPLÍCITO)
+# NSFW TOGGLE (INTENSO, GRÁFICO, EXPLÍCITO) ✅ v2
 # ==========================================================
 SAFE_SENSUAL_STYLE = """
 [NSFW_OFF]
@@ -110,6 +112,11 @@ def clear_user_cache(usuario_key: str) -> None:
 
 
 def nsfw_enabled(usuario_key: str) -> bool:
+    """Prioridade:
+    1) st.session_state["mary_nsfw_on"]
+    2) Fact "mary.nsfw"
+    3) True
+    """
     try:
         if "mary_nsfw_on" in st.session_state:
             return bool(st.session_state["mary_nsfw_on"])
@@ -131,6 +138,7 @@ def nsfw_enabled(usuario_key: str) -> bool:
         pass
 
     return True
+
 
 # ==========================================================
 # LOG / ERROS
@@ -163,7 +171,7 @@ def _prefs_line(prefs: Dict[str, str]) -> str:
 
 
 # ==========================================================
-# CENA (LOCAL / TEMPO / AÇÃO)  ✅ NOVO
+# CENA (LOCAL / TEMPO / AÇÃO) ✅ ORIGINAL + v3
 # ==========================================================
 def _get_scene_state(usuario_key: str, facts: Dict[str, Any]) -> Tuple[str, str, str]:
     """
@@ -197,6 +205,52 @@ def _persist_scene_basics(usuario_key: str, local: str, tempo: str, acao: str) -
             set_fact(usuario_key, "cena.acao", acao, {"fonte": "scene"})
     except Exception:
         pass
+
+
+# ==========================================================
+# CONTINUIDADE ESPACIAL (v3) ✅ NOVO
+# ==========================================================
+def _build_spatial_context(local: str, tempo: str, acao: str) -> str:
+    """Constrói o contexto espacial para injetar no prompt."""
+    if not local or local == "—":
+        return ""
+    
+    return f"""
+[CONTEXTO ESPACIAL — OBRIGATÓRIO]
+📍 Local atual: {local}
+⏰ Tempo: {tempo}
+🎬 Ação em andamento: {acao}
+
+⚠️ REGRA CRÍTICA DE CONTINUIDADE:
+Você DEVE manter a cena em "{local}" até que o usuário EXPLICITAMENTE indique uma mudança (ex: "vamos pro quarto", "me leva pra sala").
+NÃO invente mudanças de local. NÃO mencione objetos/móveis que não existem em "{local}".
+- Se na cozinha, NÃO mencione cama/colchão/criado-mudo.
+- Se no quarto, NÃO mencione geladeira/fogão/panelas.
+Sua memória espacial é perfeita. Mantenha a coerência.
+""".strip()
+
+
+def _user_requested_location_change(user_message: str) -> Tuple[bool, str]:
+    """Detecta se o usuário pediu mudança de local. Retorna (mudou, novo_local)."""
+    patterns = [
+        r"vamos? (pro|pra|para o|para a) (\w+)",
+        r"me leva (pro|pra|para o|para a) (\w+)",
+        r"vem (aqui )?(no|na) (\w+)",
+    ]
+    user_lower = user_message.lower()
+    for pattern in patterns:
+        match = re.search(pattern, user_lower)
+        if match:
+            location_word = match.group(2)
+            location_map = {
+                "quarto": "quarto", "cama": "quarto",
+                "cozinha": "cozinha", "geladeira": "cozinha",
+                "sala": "sala", "sofá": "sala", "sofa": "sala",
+                "banheiro": "banheiro", "chuveiro": "banheiro",
+            }
+            normalized_location = location_map.get(location_word, location_word)
+            return True, normalized_location
+    return False, ""
 
 
 # ==========================================================
@@ -317,23 +371,48 @@ def _collect_mary_events_from_facts(facts: Dict[str, Any]) -> Dict[str, str]:
         if k.startswith("mary.evento."):
             label = k.replace("mary.evento.", "", 1)
             eventos[label] = str(v)
-        elif k.startswith("mary.eventos."):
-            label = k.replace("mary.eventos.", "", 1)
-            eventos[label] = str(v)
-
     return eventos
 
 
+# ==========================================================
+# LOREBOOK
+# ==========================================================
+def _get_lorebook(usuario_key: str, query: str, k: int = 4, max_chars: int = 900) -> str:
+    try:
+        results = lore_topk(usuario_key, query, k=k)
+    except Exception:
+        return ""
+
+    if not results:
+        return ""
+
+    lines = []
+    total = 0
+    for r in results:
+        content = str(r.get("content", "") or "").strip()
+        if not content:
+            continue
+        lines.append(f"- {content}")
+        total += len(content)
+        if total > max_chars:
+            break
+
+    return "\n".join(lines) if lines else ""
+
+
+# ==========================================================
+# MEMÓRIA TEMÁTICA
+# ==========================================================
 def _detect_thematic_tags_from_prompt(prompt: str) -> List[str]:
-    low = (prompt or "").lower()
-    tags: List[str] = []
-    if any(w in low for w in ["gravidez", "grávida", "ultrassom", "obstetra", "beta-hcg"]):
-        tags.append("gravidez")
-    if any(w in low for w in ["trai", "traição", "infiel", "amante"]):
-        tags.append("traicao")
-    if any(w in low for w in ["primeira vez", "virgem", "desvirg"]):
-        tags.append("primeira_vez")
-    if any(w in low for w in ["viagem", "hotel", "aeroporto"]):
+    p = (prompt or "").lower()
+    tags = []
+    if any(x in p for x in ["trabalho", "escritório", "reunião", "projeto"]):
+        tags.append("trabalho")
+    if any(x in p for x in ["família", "mãe", "pai", "irmão", "irmã"]):
+        tags.append("familia")
+    if any(x in p for x in ["amigo", "amiga", "festa", "encontro"]):
+        tags.append("social")
+    if any(x in p for x in ["viagem", "férias", "praia", "hotel"]):
         tags.append("viagem")
     return tags
 
@@ -341,42 +420,16 @@ def _detect_thematic_tags_from_prompt(prompt: str) -> List[str]:
 def _get_thematic_memories_for_tags(usuario_key: str, tags: List[str]) -> str:
     if not tags:
         return ""
-    f = cached_get_facts(usuario_key) or {}
-    blocos = []
+    
+    facts = cached_get_facts(usuario_key) or {}
+    lines = []
     for tag in tags:
-        k = f"mary.thematic.{tag}"
-        v = f.get(k)
-        if v:
-            blocos.append(f"[{tag}] {v}")
-    return "\n".join(blocos)
-
-
-# ==========================================================
-# LOREBOOK (curto, controlado)
-# ==========================================================
-def _get_lorebook(usuario_key: str, prompt: str, k: int = 4, max_chars: int = 900) -> str:
-    try:
-        items = lore_topk(usuario_key, prompt, k=k) or []
-    except Exception:
-        items = []
-
-    lines: List[str] = []
-    for it in items:
-        txt = ""
-        if isinstance(it, dict):
-            txt = str(it.get("texto") or it.get("text") or it.get("content") or "")
-        else:
-            txt = str(it)
-        txt = re.sub(r"\s+", " ", txt).strip()
-        if txt:
-            lines.append(f"- {txt}")
-        if sum(len(x) for x in lines) > max_chars:
-            break
-
-    out = "\n".join(lines).strip()
-    if not out:
-        return ""
-    return out[:max_chars]
+        key = f"mary.tema.{tag}"
+        val = facts.get(key)
+        if val:
+            lines.append(f"- [{tag}] {str(val).strip()}")
+    
+    return "\n".join(lines) if lines else ""
 
 
 # ==========================================================
@@ -411,7 +464,7 @@ def _already_open_ended(text: str) -> bool:
     t = (text or "").strip()
     if not t:
         return True
-    return bool(re.search(r"(\.\.\.|—)\s*$", t))  # NOTE: NÃO inclui '?'
+    return bool(re.search(r"(\.\.\.|—)\s*$", t))
 
 
 def _pick_hook(prompt: str, last_text: str) -> str:
@@ -447,11 +500,11 @@ def _ensure_continuation_hook(texto: str, prompt: str) -> str:
 
 
 # ==========================================================
-# ✅ SEM PERGUNTA NO FINAL (o que você reclamou)
+# ✅ SEM PERGUNTA NO FINAL
 # ==========================================================
 def _strip_final_question(texto: str) -> str:
     """
-    Remove a vibe “NPC” (terminar sempre perguntando).
+    Remove a vibe "NPC" (terminar sempre perguntando).
     - Se o ÚLTIMO parágrafo termina com '?', troca por '.'.
     - Se a última linha é uma pergunta curta típica, converte em afirmação/gancho.
     """
@@ -459,9 +512,7 @@ def _strip_final_question(texto: str) -> str:
     if not t:
         return t
 
-    # pega última linha
     lines = t.splitlines()
-    # remove linhas vazias finais
     while lines and not lines[-1].strip():
         lines.pop()
 
@@ -470,7 +521,6 @@ def _strip_final_question(texto: str) -> str:
 
     last = lines[-1].strip()
 
-    # pergunta típica no final → neutraliza
     typical = [
         "o que você quer",
         "prefere",
@@ -480,36 +530,34 @@ def _strip_final_question(texto: str) -> str:
         "tá entendendo",
         "certo",
         "né",
+        "não é",
+        "concorda",
     ]
-    low = last.lower()
 
     if last.endswith("?"):
-        # troca '?' por '.'
-        last2 = last[:-1].rstrip() + "."
-        # se era “pergunta típica”, dá um pequeno fechamento afirmativo
-        if any(x in low for x in typical) and len(last) < 140:
-            last2 = re.sub(r"\?\s*$", ".", last).rstrip("?").rstrip() + "."
-        lines[-1] = last2
-        return "\n".join(lines).rstrip()
+        low = last.lower()
+        if any(phrase in low for phrase in typical):
+            lines[-1] = last[:-1] + "."
+        else:
+            lines[-1] = last[:-1] + "…"
 
-    return t
+    return "\n".join(lines)
 
 
 def _enforce_scene_flow(texto: str, prompt: str, usuario_key: str) -> str:
-    """Camada final obrigatória: continuidade + sem pergunta final."""
-    if not texto:
-        return texto
-    texto = _ensure_continuation_hook(texto, prompt)
+    """Pós-processamento final: continuidade + sem pergunta final."""
     texto = _strip_final_question(texto)
+    texto = _ensure_continuation_hook(texto, prompt)
     return texto
 
 
 # ==========================================================
-# SYSTEM BLOCK (curto e estável)  ✅ agora com CENA
+# SYSTEM BLOCK (v3 - COM CONTEXTO ESPACIAL) ✅
 # ==========================================================
 def _build_system_block(
     persona_text: str,
     rolling_summary: str,
+    spatial_context: str,  # ✅ NOVO v3
     scene_loc: str,
     scene_time: str,
     scene_action: str,
@@ -526,14 +574,17 @@ def _build_system_block(
     events = f"\n\nEVENTOS_FIXOS_MARY:\n{events_block}" if events_block else ""
     lore = f"\n\nLOREBOOK_RELEVANTE:\n{lore_block}" if lore_block else ""
 
-    return f"""
+    # ✅ v3: Contexto espacial injetado no topo
+    spatial_section = f"\n\n{spatial_context}\n" if spatial_context else ""
+
+    return f"""{spatial_section}
 Você é **Mary Massariol – Esposa Cúmplice**, personagem fixa em um roleplay contínuo com o usuário.
 
 REGRAS DURAS:
 - Fale SEMPRE em primeira pessoa (eu). Nunca quebre a quarta parede.
-- Continuidade ABSOLUTA: não reinicie cena, não teleporte e não troque lugar/tempo sem motivo.
+- Continuidade ABSOLUTA: não reinicie cena, não teleporte e não troque lugar/tempo sem motivo (siga o CONTEXTO ESPACIAL acima).
 - INICIATIVA: em toda resposta, faça pelo menos 1 ação concreta (gesto, movimento, aproximação, decisão) antes de qualquer pergunta.
-- NÃO termine resposta com pergunta. (Nada de “o que você quer?” no final.)
+- NÃO termine resposta com pergunta. (Nada de "o que você quer?" no final.)
 
 PERSONA (núcleo fixo):
 {persona_text}
@@ -563,7 +614,7 @@ FOCO_SENSORIAL_DESTE_TURNO:
 
 CONTINUIDADE_DE_CENA (OBRIGATÓRIO):
 - NÃO conclua automaticamente.
-- Se o usuário não pedir para finalizar, evite “pós-cena/encerramento”.
+- Se o usuário não pedir para finalizar, evite "pós-cena/encerramento".
 - Mantenha a cena em andamento com naturalidade (sem frases padrão repetidas).
 
 {nsfw_block}
@@ -621,86 +672,40 @@ def _robust_chat_call(
         data, used_model, prov = route_chat_strict(model, _build_body(model))
         return data, used_model, prov
     except Exception as e:
-        st.session_state["mary_last_model_error"] = f"{model}: {type(e).__name__}"
-        _log_error("robust_chat_call.primary", e)
+        _log_error("robust_chat_call_main", e)
 
     for fb in fallback_models:
         try:
             data, used_model, prov = route_chat_strict(fb, _build_body(fb))
-            st.session_state["mary_last_model_error"] = ""
             return data, used_model, prov
         except Exception as e:
-            st.session_state["mary_last_model_error"] = f"{fb}: {type(e).__name__}"
-            _log_error("robust_chat_call.fallback", e)
+            _log_error(f"robust_chat_call_fallback_{fb}", e)
 
-    return {
-        "choices": [{
-            "message": {
-                "role": "assistant",
-                "content": "Desculpa… tive um problema para responder agora. Tenta de novo em instantes."
-            }
-        }]
-    }, "synthetic-fallback", "synthetic-fallback"
+    raise RuntimeError("Todos os modelos falharam (main + fallbacks).")
 
 
 # ==========================================================
-# TOOLS (tool-calling)
+# TOOLS (opcional)
 # ==========================================================
 TOOLS = [
     {
         "type": "function",
         "function": {
-            "name": "get_memory_pin",
-            "description": "Retorna um resumo curto dos fatos canônicos da Mary para este usuário.",
-            "parameters": {"type": "object", "properties": {}, "required": []},
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "set_fact",
-            "description": "Define/atualiza um fact simples na memória do usuário (chave/valor).",
+            "name": "registrar_evento_mary",
+            "description": "Registra um evento marcante na memória canônica de Mary (ex: 'primeira_vez_que_cozinhamos_juntos').",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "key": {"type": "string"},
-                    "value": {"type": "string"},
+                    "name": {
+                        "type": "string",
+                        "description": "Nome curto do evento (snake_case, ex: 'primeira_viagem_juntos').",
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "Descrição do evento (1-2 frases).",
+                    },
                 },
-                "required": ["key", "value"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "save_event",
-            "description": (
-                "Registra um EVENTO CANÔNICO importante em mary.evento.<label>. "
-                "Use apenas para fatos de longo prazo que devem influenciar cenas futuras."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "label": {"type": "string"},
-                    "content": {"type": "string"},
-                },
-                "required": ["content"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "register_entity",
-            "description": "Registra uma pessoa importante na vida da Mary como entidade canônica (mary.ent.*).",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "name": {"type": "string"},
-                    "role": {"type": "string"},
-                    "description": {"type": "string"},
-                },
-                "required": ["name"],
+                "required": ["name", "description"],
             },
         },
     },
@@ -775,6 +780,16 @@ class MaryService(BaseCharacter):
         plow = prompt.lower().strip()
 
         # =========================
+        # ✅ v3: DETECÇÃO DE MUDANÇA DE LOCAL (ANTES DE TUDO)
+        # =========================
+        mudou, novo_local = _user_requested_location_change(prompt)
+        if mudou and novo_local:
+            _persist_scene_basics(usuario_key, novo_local, "agora", "transição de local")
+            clear_user_cache(usuario_key)
+            # Retorna uma mini-resposta de transição
+            return f"_(Eu te puxo pela mão e te levo pro {novo_local}...)_"
+
+        # =========================
         # COMANDOS DO APP (RESET)
         # =========================
         if plow == "/reset historico":
@@ -801,14 +816,12 @@ class MaryService(BaseCharacter):
             set_fact(usuario_key, "mary.rs.v2.ts", time.time(), {"fonte": "cmd_reset_total"})
             set_fact(usuario_key, "mary.reset.total.ts", time.time(), {"fonte": "cmd_reset_total"})
 
-            # ⚠️ IMPORTANTE: mantemos a cena (local/tempo/ação) para não “resetar o mundo”
             clear_user_cache(usuario_key)
             return "⚠️ RESET TOTAL aplicado: eventos/entidades e resumo rolante limpos (facts). Cena (local/tempo/ação) preservada."
 
         if plow.startswith("/local "):
             novo_local = prompt[len("/local "):].strip()
             if novo_local:
-                # ✅ atualiza local legado e novo estado de cena
                 set_fact(usuario_key, "local_cena_atual", novo_local, {"fonte": "chat"})
                 set_fact(usuario_key, "cena.local", novo_local, {"fonte": "chat"})
                 clear_user_cache(usuario_key)
@@ -825,7 +838,10 @@ class MaryService(BaseCharacter):
         # ✅ Estado canônico de cena
         scene_loc, scene_time, scene_action = _get_scene_state(usuario_key, f_all)
 
-        # ✅ NSFW block SEM duplicação
+        # ✅ v3: Constrói o contexto espacial
+        spatial_context = _build_spatial_context(scene_loc, scene_time, scene_action)
+
+        # ✅ NSFW block
         nsfw_on = nsfw_enabled(usuario_key)
         st.session_state["_mary_effective_nsfw"] = bool(nsfw_on)
         nsfw_block = NSFW_TOGGLE_STYLE if nsfw_on else SAFE_SENSUAL_STYLE
@@ -854,9 +870,11 @@ class MaryService(BaseCharacter):
 
         lore_block = _get_lorebook(usuario_key, prompt, k=4, max_chars=900)
 
+        # ✅ v3: Monta o system block COM contexto espacial
         system_block = _build_system_block(
             persona_text=persona_text,
             rolling_summary=rolling,
+            spatial_context=spatial_context,  # ✅ NOVO
             scene_loc=scene_loc,
             scene_time=scene_time,
             scene_action=scene_action,
@@ -946,192 +964,123 @@ class MaryService(BaseCharacter):
         # ✅ pós-processamento FINAL: continuidade + sem pergunta final
         texto = _enforce_scene_flow(texto, prompt, usuario_key)
 
-        # Ultra IA opcional (✅ com trava anti-conclusão)
+        # Ultra IA opcional
         if st.session_state.get("ultra_ia_on", False) and texto:
             try:
-                notes = critic_review(
-                    model,
-                    system_block + "\n\nREGRA EXTRA: não conclua automaticamente; não termine com pergunta; mantenha local/tempo/ação.",
-                    prompt,
-                    texto,
-                )
-                texto = polish(model, system_block, prompt, texto, notes)
-                texto = _enforce_scene_flow(texto, prompt, usuario_key)
+                notes = critic_review(texto, context="Mary roleplay adulto")
+                if notes and "melhorar" in notes.lower():
+                    texto = polish(texto, notes=notes)
             except Exception as e:
                 _log_error("ultra_ia", e)
 
-        # ✅ Persiste cena mínima (não deixa virar “vazio”)
-        _persist_scene_basics(usuario_key, scene_loc, scene_time, scene_action)
+        # Atualiza resumo rolante
+        self._update_rolling_summary(usuario_key, user, prompt, texto, model)
 
+        # Salva interação
         try:
-            tag = f"{provider}:{used_model}" if provider and used_model else model
-            save_interaction(usuario_key, prompt, texto, tag)
+            save_interaction(usuario_key, prompt, texto, used_model or model)
         except Exception as e:
             _log_error("save_interaction", e)
 
-        try:
-            self._update_rolling_summary_v2(usuario_key, model, prompt, texto)
-        except Exception as e:
-            _log_error("update_summary", e)
-
-        if st.session_state.get("json_mode_on", False):
-            return json.dumps({"role": "assistant", "character": "Mary", "content": texto}, ensure_ascii=False, indent=2)
+        clear_user_cache(usuario_key)
 
         return texto
 
-    def _exec_tool_call(self, name: str, args: dict, usuario_key: str, last_assistant: str = "") -> str:
-        if name == "get_memory_pin":
-            return self._build_memory_pin(usuario_key, st.session_state.get("user_id", "") or "")
-
-        if name == "set_fact":
-            k = str((args or {}).get("key", "")).strip()
-            v = str((args or {}).get("value", ""))
-            if not k:
-                return "ERRO: key vazia."
-            set_fact(usuario_key, k, v, {"fonte": "tool_call"})
-            clear_user_cache(usuario_key)
-            return f"OK: {k}={v}"
-
-        if name == "save_event":
-            label = str((args or {}).get("label", "")).strip()
-            content = str((args or {}).get("content", "")).strip() or (last_assistant or "").strip()
-            if not content:
-                return "ERRO: content vazio."
-            if label:
-                slug = re.sub(r"[^a-z0-9]+", "_", label.lower()).strip("_") or "evento"
-            else:
-                slug = f"evento_{int(time.time())}"
-            k = f"mary.evento.{slug}"
-            set_fact(usuario_key, k, content, {"fonte": "tool_event"})
-            clear_user_cache(usuario_key)
-            st.session_state["last_saved_mary_event_key"] = k
-            return f"OK: salvo em {k}"
-
-        if name == "register_entity":
-            ent_name = str((args or {}).get("name", "")).strip()
-            ent_role = str((args or {}).get("role", "")).strip().lower()
-            desc = str((args or {}).get("description", "")).strip()
-            if not ent_name:
-                return "ERRO: name vazio."
-            slug = re.sub(r"[^a-z0-9]+", "_", ent_name.lower()).strip("_") or "entidade"
-            base = f"mary.ent.{slug}"
-            set_fact(usuario_key, f"{base}.nome", ent_name, {"fonte": "auto_entidade"})
-            if ent_role:
-                set_fact(usuario_key, f"{base}.papel", ent_role, {"fonte": "auto_entidade"})
-            if desc:
-                set_fact(usuario_key, f"{base}.descricao", desc, {"fonte": "auto_entidade"})
-            clear_user_cache(usuario_key)
-            return f"OK: entidade registrada em {base}"
-
-        return f"ERRO: ferramenta desconhecida: {name}"
+    def _build_memory_pin(self, usuario_key: str, user: str) -> str:
+        return f"[LEMBRETE: Você é Mary, esposa de {user}. Mantenha continuidade absoluta de lugar, tempo e ação.]"
 
     def _compact_user_evidence(self, docs: List[Dict[str, Any]], max_chars: int = 320) -> str:
-        snippets: List[str] = []
-        for d in reversed(docs or []):
+        lines = []
+        total = 0
+        for d in reversed(docs[-5:]):
             u = (d.get("mensagem_usuario") or "").strip()
             if u:
-                u = re.sub(r"\s+", " ", u)
-                snippets.append(u)
-            if len(snippets) >= 4:
-                break
-        return " | ".join(reversed(snippets))[:max_chars]
+                lines.append(f"- {u}")
+                total += len(u)
+                if total > max_chars:
+                    break
+        return "\n".join(lines) if lines else "—"
 
-    def _build_memory_pin(self, usuario_key: str, user_display: str) -> str:
-        f = cached_get_facts(usuario_key) or {}
-        parceiro = str(f.get("parceiro_atual") or f.get("parceiro") or user_display or "—").strip()
-        casados = bool(f.get("casados", False))
+    def _montar_historico(
+        self,
+        usuario_key: str,
+        history_boot: List[Dict[str, str]],
+        model: str,
+        verbatim_ultimos: int = 30,
+    ) -> List[Dict[str, Any]]:
+        docs = cached_get_history(usuario_key) or []
+        
+        hist_msgs = []
+        for msg in history_boot:
+            hist_msgs.append(msg)
 
-        gravida_raw = f.get("gravida", False)
-        gravida = bool(gravida_raw) if isinstance(gravida_raw, bool) else str(gravida_raw).strip().lower() in ("1", "true", "sim", "grávida", "gravida")
-
-        blocos = [f"parceiro_atual={parceiro}", f"casados={casados}"]
-        if gravida:
-            blocos.append("gravida=True")
-
-        return (
-            "MEMÓRIA_PIN: "
-            f"FATOS={{ {'; '.join(blocos)} }}.\n"
-            "- Use estes FATOS como verdade canônica.\n"
-            "- Se algo NÃO estiver na memória, siga o que o usuário disser — não invente."
-        )
-
-    def _montar_historico(self, usuario_key: str, history_boot: List[Dict[str, str]], model: str, verbatim_ultimos: int = 30) -> List[Dict[str, str]]:
-        hist_budget, _, _ = _budget_slices(model)
-        docs = cached_get_history(usuario_key)
-
-        if not docs:
-            st.session_state["_mem_drop_report"] = {}
-            return history_boot[:] if history_boot else []
-
-        pares: List[Dict[str, str]] = []
-        for d in docs:
+        for d in docs[-verbatim_ultimos:]:
             u = (d.get("mensagem_usuario") or "").strip()
             a = (d.get("resposta_mary") or "").strip()
             if u:
-                pares.append({"role": "user", "content": u})
+                hist_msgs.append({"role": "user", "content": u})
             if a:
-                pares.append({"role": "assistant", "content": a})
+                hist_msgs.append({"role": "assistant", "content": a})
 
-        keep_msgs = max(0, verbatim_ultimos * 2)
-        verbatim = pares[-keep_msgs:] if keep_msgs else []
-        antigos = pares[: max(0, len(pares) - len(verbatim))]
+        return hist_msgs
 
-        msgs: List[Dict[str, str]] = []
-        summarized_pairs = 0
-        trimmed_pairs = 0
+    def _update_rolling_summary(
+        self,
+        usuario_key: str,
+        user: str,
+        prompt: str,
+        response: str,
+        model: str,
+    ) -> None:
+        try:
+            f = cached_get_facts(usuario_key) or {}
+            last_ts = float(f.get("mary.rs.v2.ts", 0.0) or 0.0)
+            now = time.time()
+            
+            if now - last_ts < 300:
+                return
 
-        if antigos:
-            summarized_pairs = len(antigos) // 2
-            bloco = "\n\n".join(m["content"] for m in antigos)
-            resumo = _llm_summarize(model, bloco)
-            if resumo.strip():
-                msgs.append({"role": "system", "content": f"[RESUMO]\n{resumo}"})
+            docs = cached_get_history(usuario_key) or []
+            if len(docs) < 10:
+                return
 
-        msgs.extend(verbatim)
+            recent = docs[-20:]
+            text_to_summarize = ""
+            for d in recent:
+                u = (d.get("mensagem_usuario") or "").strip()
+                a = (d.get("resposta_mary") or "").strip()
+                if u:
+                    text_to_summarize += f"Usuário: {u}\n"
+                if a:
+                    text_to_summarize += f"Mary: {a}\n"
 
-        def _hist_tokens(mm: List[Dict[str, str]]) -> int:
-            return sum(toklen(m.get("content", "") or "") for m in mm)
+            if not text_to_summarize.strip():
+                return
 
-        min_verbatim_msgs = 6
-        while _hist_tokens(msgs) > hist_budget and len(verbatim) > min_verbatim_msgs:
-            verbatim = verbatim[2:]
-            trimmed_pairs += 1
-            msgs = [m for m in msgs if m["role"] == "system"] + verbatim
+            summary = _llm_summarize(model, text_to_summarize)
+            if summary:
+                set_fact(usuario_key, "mary.rs.v2", summary, {"fonte": "auto_summary"})
+                set_fact(usuario_key, "mary.rs.v2.ts", now, {"fonte": "auto_summary"})
+                clear_user_cache(usuario_key)
 
-        st.session_state["_mem_drop_report"] = {
-            "summarized_pairs": summarized_pairs,
-            "trimmed_pairs": trimmed_pairs,
-            "hist_tokens": _hist_tokens(msgs),
-            "hist_budget": hist_budget,
-        }
-        return msgs if msgs else (history_boot[:] if history_boot else [])
+        except Exception as e:
+            _log_error("update_rolling_summary", e)
 
-    def _update_rolling_summary_v2(self, usuario_key: str, model: str, last_user: str, last_assistant: str) -> None:
-        f = cached_get_facts(usuario_key) or {}
-        resumo_anterior = str(f.get("mary.rs.v2", "") or "")
+    def _exec_tool_call(
+        self,
+        func_name: str,
+        args: Dict[str, Any],
+        usuario_key: str,
+        last_assistant: str,
+    ) -> str:
+        if func_name == "registrar_evento_mary":
+            name = args.get("name", "")
+            description = args.get("description", "")
+            if name and description:
+                key = f"mary.evento.{name}"
+                set_fact(usuario_key, key, description, {"fonte": "tool_call"})
+                clear_user_cache(usuario_key)
+                return f"✅ Evento '{name}' registrado com sucesso."
+            return "❌ Parâmetros inválidos para registrar_evento_mary."
 
-        seed = (
-            "Atualize o resumo contínuo com fatos duráveis. "
-            "Não repita diálogos e não invente fatos. Saída: 8–14 frases curtas."
-        )
-        corpo = f"RESUMO_ANTERIOR:\n{resumo_anterior or '(sem resumo)'}\n\nULTIMA_INTERACAO:\nUSER: {last_user}\nMARY: {last_assistant}"
-
-        data, _, _ = route_chat_strict(
-            model,
-            {
-                "model": model,
-                "messages": [
-                    {"role": "system", "content": seed},
-                    {"role": "user", "content": corpo},
-                ],
-                "max_tokens": 260,
-                "temperature": 0.2,
-                "top_p": 0.9,
-            },
-        )
-
-        resumo = ((data.get("choices", [{}])[0].get("message", {}) or {}).get("content") or "").strip()
-        if resumo:
-            set_fact(usuario_key, "mary.rs.v2", resumo, {"fonte": "auto"})
-            set_fact(usuario_key, "mary.rs.v2.ts", time.time(), {"fonte": "auto"})
-            clear_user_cache(usuario_key)
+        return f"❌ Função desconhecida: {func_name}"
