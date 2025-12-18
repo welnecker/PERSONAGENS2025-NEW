@@ -271,7 +271,7 @@ def _choose_default_model(available: list[str]) -> str:
 
 def _garantir_estado_inicial() -> None:
     if "user_id" not in st.session_state or not st.session_state["user_id"]:
-        st.session_state["user_id"] = "Janio"
+        st.session_state["user_id"] = "Janio Donisete"
     if "chat_history" not in st.session_state:
         st.session_state["chat_history"] = []
 
@@ -475,7 +475,7 @@ def main() -> None:
     with st.sidebar:
         st.header("Mary – Controles")
 
-        st.text_input("👤 Usuário", key="user_id", on_change=_on_user_change)
+        st.text_input("👤 Usuário", value="Janio Donisete", disabled=True)
         st.caption(f"🔑 usuario_key atual: {_current_user_key()}")
 
         try:
