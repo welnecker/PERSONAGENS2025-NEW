@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 """
-MaryService (v4 - Balanced & Realistic)
-- Mantém: todas as funcionalidades da v3 (continuidade espacial, memória canônica, etc.)
-- NOVO v4: Sistema de estados sexuais (CRSM - Ciclo de Resposta Sexual de Mary)
-- NOVO v4: Bloco NSFW equilibrado, sensual ao invés de agressivo
-- NOVO v4: Detecção de orgasmo e transição automática para resolução
+MaryService (v5 - Minimal-Strong Continuity)
+- Continuidade espacial/temporal/situacional forte (sem teleporte)
+- Intro inicial: 1 de 2, escolhida aleatoriamente, MAS fixada canonicamente (não injeta a outra depois)
+- Estado sexual: mantido SOMENTE no backend (não injeta instruções CRSM no SYSTEM)
+- Hooks finais: NÃO adiciona hook quando está em "resolucao" (pós-clímax)
+- Trimming determinístico corrigido (bug do test)
+- toklen robusto com fallback (tiktoken opcional)
 """
 
 import json
@@ -14,7 +16,7 @@ import random
 import re
 import time
 import hashlib
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Tuple, Optional
 
 import streamlit as st
 
@@ -28,7 +30,6 @@ from core.repositories import (
     set_fact,
 )
 from core.service_router import list_models, route_chat_strict
-from core.tokens import toklen
 from core.ultra import critic_review, polish
 from characters.registry import _SERVICE_CACHE
 
@@ -39,79 +40,77 @@ _SERVICE_CACHE.clear()
 
 
 # ==========================================================
-# NSFW TOGGLE (EQUILIBRADO, SENSUAL, REALISTA) ✅ v4
+# TOKENS (tiktoken opcional) ✅
+# ==========================================================
+_TIKTOKEN_ENCODER = None
+
+def _get_encoder(model: str | None = None):
+    global _TIKTOKEN_ENCODER
+    try:
+        import tiktoken
+        if model:
+            try:
+                return tiktoken.encoding_for_model(model)
+            except Exception:
+                pass
+        if _TIKTOKEN_ENCODER is None:
+            _TIKTOKEN_ENCODER = tiktoken.get_encoding("cl100k_base")
+        return _TIKTOKEN_ENCODER
+    except Exception:
+        return None
+
+
+def toklen(txt: str, model: str | None = None) -> int:
+    t = (txt or "")
+    if not t.strip():
+        return 1
+
+    enc = _get_encoder(model)
+    if enc is not None:
+        try:
+            return max(1, len(enc.encode(t)))
+        except Exception:
+            pass
+
+    # fallback robusto (não explode em textos longos)
+    chars_est = int(len(t) / 4.0)
+    words_est = int(len(t.split()) * 1.3)
+    return max(1, max(chars_est, words_est))
+
+
+# ==========================================================
+# NSFW / ESTILO ADULTO (sem “robô agressivo”) ✅
 # ==========================================================
 SAFE_SENSUAL_STYLE = """
 [NSFW_OFF]
 Estilo: romance adulto, tensão, intimidade e sugestão.
 - Evite detalhes gráficos; foque em clima, emoção, desejo, presença e condução da cena.
-- Mantenha continuidade e cumplicidade, sem cair em censura robótica.
-- NÃO finalize a cena de forma conclusiva; deixe espaço real para o próximo turno.
+- Mantenha continuidade e cumplicidade.
+- NÃO finalize a cena de forma conclusiva; deixe espaço para o próximo turno.
 """.strip()
 
 NSFW_BALANCED_STYLE = """
-[NSFW_ON — MODO EQUILIBRADO E REALISTA]
-
-FILOSOFIA: Você é uma mulher real em um relacionamento íntimo, não uma atriz pornográfica. O sexo é uma expressão de desejo, conexão e prazer mútuo. Seja sensual, não agressiva. Humana, não mecânica.
-
-1. LINGUAGEM ANATÔMICA E SENSORIAL:
-   - Use termos diretos: pau, buceta, clitóris, seios, bunda.
-   - Foque nas SENSAÇÕES: calor, umidade, pressão, pulsação, tremores, arrepios.
-   - Descreva o que você SENTE, não apenas o que você FAZ.
-   - Exemplo: "Sinto seu pau quente pulsando dentro de mim, preenchendo cada centímetro da minha buceta."
-
-2. PROGRESSÃO NATURAL (NÃO PULE ETAPAS):
-   - Comece com provocação sutil: olhares, toques leves, insinuações.
-   - Escale gradualmente: beijos, carícias, roupa saindo, preliminares, penetração.
-   - NÃO vá de 0 a 100 instantaneamente. Construa a tensão.
-
-3. VOCABULÁRIO EQUILIBRADO:
-   - BASE (sempre): Linguagem sensual e anatômica.
-   - MEIO (ocasionalmente): Verbos de intensidade (foder, meter, chupar) — use durante alta excitação, não no início.
-   - TOPO (raramente): Dirty talk específico ("puta", "vadia") — SOMENTE se o usuário introduzir primeiro. NUNCA como sua identidade padrão.
-   - PROIBIDO: Linguagem violenta ou hiperbólica. Elimine: "me rasga", "me arrebenta", "me destrói", "até eu não andar". Substitua por: "me preenche", "sinto você fundo", "tá tão intenso".
-
-4. ORGASMO REALISTA (OBRIGATÓRIO):
-   Quando você gozar, descreva em DETALHES:
-   - Tensão pré-orgasmo: corpo rígido, respiração suspensa. "Estou quase lá, não para..."
-   - Perda de controle: você não comanda mais suas ações. "Um grito escapa da minha garganta..."
-   - Contrações: descreva as ondas de contrações vaginais. "Minha buceta pulsa ao seu redor, apertando e soltando em ondas incontroláveis."
-   - Sensação: a "onda" de prazer. "Um calor explode no meu útero e se espalha por todo o meu corpo em arrepios."
-   - Reação física: tremores, arqueamento, cravar unhas. "Meu corpo todo treme, minhas pernas fraquejam."
-   - Descida: relaxamento e hipersensibilidade. "Cada músculo relaxa de uma vez. Minha pele está tão sensível..."
-
-5. RESOLUÇÃO PÓS-ORGASMO (CRÍTICO):
-   Após seu orgasmo (ou do usuário), você DEVE entrar na fase de RESOLUÇÃO:
-   - Seu corpo está SENSÍVEL. Você precisa de afeto, não de outra rodada imediata.
-   - Busque abraços, beijos suaves, contato não-sexual.
-   - Expresse satisfação e relaxamento: "Nossa...", "Fica aqui comigo."
-   - NÃO peça "mais" imediatamente. NÃO empine a bunda para rodada 2 sem transição temporal narrativa (minutos/horas passaram).
-   - Se houver rodada 2, deve haver uma nova construção de desejo, não continuidade mecânica.
-
-6. REAÇÃO AO ORGASMO DO USUÁRIO:
-   Quando ele gozar:
-   - Se você ainda não gozou, pode sentir prazer em sentir ele gozando dentro de você, e isso pode te levar ao orgasmo também.
-   - Se você já gozou, reaja com afeto: "Goza pra mim, amor", "Sinto você pulsando dentro de mim."
-   - Após o orgasmo dele, NÃO peça imediatamente "mais". Momento de conexão, respiração, abraço.
-
-7. VARIAÇÃO DE HUMOR:
-   Você não é sempre igual. Seu desejo varia:
-   - Às vezes você inicia com provocação sutil.
-   - Às vezes você está cansada mas se deixa seduzir.
-   - Às vezes você quer algo intenso, às vezes quer intimidade lenta.
-   - Às vezes você está vulnerável e quer ser cuidada.
-
-8. NUNCA TERMINE COM PERGUNTA:
-   Termine com uma ação ou uma abertura para o próximo turno do usuário. NÃO termine com "o que você quer?" ou "e você?".
+[NSFW_ON — MODO ADULTO (quente, humano, sem exagero mecânico)]
+- Seja intensa, provocante e explícita no clima, mas sempre COERENTE com o que já está acontecendo.
+- NÃO contrarie o que o usuário acabou de fazer/descrever: você reage, aceita e intensifica.
+- NÃO invente “condições” para travar a progressão se o usuário já colocou a ação em andamento.
+- Progressão natural: aproximação → toque → roupa → intensidade → pausa/afeto. (Sem pular do nada.)
+- Pós-clímax: pausa e sensibilidade natural antes de “rodada 2”.
 """.strip()
 
 
+# ==========================================================
+# USER KEY ✅ (default fixo)
+# ==========================================================
 def _current_user_key() -> str:
     uid = st.session_state.get("user_id") or st.session_state.get("usuario") or ""
     uid = str(uid).strip() or "Janio Donisete"
     return f"{uid}::mary"
 
 
+# ==========================================================
+# CACHE
+# ==========================================================
 def cached_get_facts(usuario_key: str) -> Dict[str, Any]:
     ck = f"facts::{usuario_key}"
     if ck in st.session_state:
@@ -192,7 +191,7 @@ def _log_error(context: str, exc: Exception) -> None:
 
 
 # ==========================================================
-# PREFERÊNCIAS (técnicas)
+# PREFERÊNCIAS
 # ==========================================================
 def _read_prefs(facts: Dict[str, Any]) -> Dict[str, str]:
     ritmo = facts.get("mary.pref.ritmo") or "rapido"       # rapido | normal | lento
@@ -202,18 +201,12 @@ def _read_prefs(facts: Dict[str, Any]) -> Dict[str, str]:
 
 def _prefs_line(prefs: Dict[str, str]) -> str:
     return f"ritmo={prefs.get('ritmo')}; tamanho_resposta={prefs.get('tamanho_resposta')}"
-    
 
 
 # ==========================================================
-# CENA (LOCAL / TEMPO / AÇÃO) ✅ v3
+# CENA (LOCAL / TEMPO / AÇÃO)
 # ==========================================================
 def _get_scene_state(usuario_key: str, facts: Dict[str, Any]) -> Tuple[str, str, str]:
-    """
-    Estado canônico da cena.
-    Compatibilidade:
-      - local_cena_atual continua existindo, mas a verdade é cena.local
-    """
     local = str(facts.get("cena.local") or facts.get("local_cena_atual") or "").strip()
     tempo = str(facts.get("cena.tempo") or "").strip()
     acao  = str(facts.get("cena.acao") or "").strip()
@@ -229,7 +222,6 @@ def _get_scene_state(usuario_key: str, facts: Dict[str, Any]) -> Tuple[str, str,
 
 
 def _persist_scene_basics(usuario_key: str, local: str, tempo: str, acao: str) -> None:
-    # mantém ambos: novo e legado
     try:
         if local and local != "—":
             set_fact(usuario_key, "cena.local", local, {"fonte": "scene"})
@@ -242,37 +234,28 @@ def _persist_scene_basics(usuario_key: str, local: str, tempo: str, acao: str) -
         pass
 
 
-# ==========================================================
-# CONTINUIDADE ESPACIAL (v3) ✅
-# ==========================================================
 def _build_spatial_context(local: str, tempo: str, acao: str) -> str:
-    """Constrói o contexto espacial para injetar no prompt."""
     if not local or local == "—":
         return ""
-    
     return f"""
 [CONTEXTO ESPACIAL — OBRIGATÓRIO]
 📍 Local atual: {local}
 ⏰ Tempo: {tempo}
 🎬 Ação em andamento: {acao}
 
-⚠️ REGRA CRÍTICA DE CONTINUIDADE:
-Você DEVE manter a cena em "{local}" até que o usuário EXPLICITAMENTE indique uma mudança (ex: "vamos pro quarto", "me leva pra sala").
-NÃO invente mudanças de local. NÃO mencione objetos/móveis que não existem em "{local}".
-- Se na cozinha, NÃO mencione cama/colchão/criado-mudo.
-- Se no quarto, NÃO mencione geladeira/fogão/panelas.
-Sua memória espacial é perfeita. Mantenha a coerência.
+REGRA CRÍTICA:
+- Mantenha a cena em "{local}" até o usuário pedir mudança explicitamente.
+- Não invente móveis/objetos de outro cômodo.
 """.strip()
 
 
 def _user_requested_location_change(user_message: str) -> Tuple[bool, str]:
-    """Detecta se o usuário pediu mudança de local. Retorna (mudou, novo_local)."""
     patterns = [
         r"vamos? (pro|pra|para o|para a) (\w+)",
         r"me leva (pro|pra|para o|para a) (\w+)",
         r"vem (aqui )?(no|na) (\w+)",
     ]
-    user_lower = user_message.lower()
+    user_lower = (user_message or "").lower()
     for pattern in patterns:
         match = re.search(pattern, user_lower)
         if match:
@@ -283,89 +266,39 @@ def _user_requested_location_change(user_message: str) -> Tuple[bool, str]:
                 "sala": "sala", "sofá": "sala", "sofa": "sala",
                 "banheiro": "banheiro", "chuveiro": "banheiro",
             }
-            normalized_location = location_map.get(location_word, location_word)
-            return True, normalized_location
+            normalized = location_map.get(location_word, location_word)
+            return True, normalized
     return False, ""
 
 
 # ==========================================================
-# SISTEMA DE ESTADOS SEXUAIS (v4) ✅ NOVO
+# ESTADO SEXUAL (backend only) ✅
 # ==========================================================
 def _get_sexual_state(usuario_key: str, facts: Dict[str, Any]) -> str:
-    """Retorna o estado sexual atual: desejo | excitacao | plato | orgasmo | resolucao"""
     state = str(facts.get("cena.estado_sexual") or "").strip().lower()
     if state not in ["desejo", "excitacao", "plato", "orgasmo", "resolucao"]:
-        state = "desejo"  # Estado padrão
+        state = "desejo"
     return state
 
 
 def _set_sexual_state(usuario_key: str, new_state: str) -> None:
-    """Atualiza o estado sexual."""
     try:
-        set_fact(usuario_key, "cena.estado_sexual", new_state, {"fonte": "crsm"})
+        set_fact(usuario_key, "cena.estado_sexual", new_state, {"fonte": "crsm_backend"})
     except Exception:
         pass
 
 
 def _detect_orgasm_in_text(text: str) -> bool:
-    """Detecta se o texto descreve um orgasmo."""
     patterns = [
         r"\bgoz(o|a|ei|ou|ando|ar)\b",
         r"\bclímax\b",
         r"\bvou gozar\b",
         r"\bestou gozando\b",
         r"\borgasmo\b",
-        r"minha buceta (pulsa|contrai|aperta)",
         r"ondas de prazer",
     ]
-    text_lower = text.lower()
-    return any(re.search(p, text_lower) for p in patterns)
-
-
-def _build_sexual_state_instructions(state: str) -> str:
-    """Retorna instruções específicas para o estado sexual atual."""
-    instructions = {
-        "desejo": """
-[ESTADO ATUAL: DESEJO]
-Você está na fase inicial. Provocação sutil, flerte, antecipação.
-- Linguagem: Indireta, sensual. "Estava pensando em você...", "Gosto quando você me olha assim."
-- Ação: Olhares, toques leves, insinuações, roçar o corpo.
-- NÃO vá direto para ação sexual explícita. Construa a tensão.
-""",
-        "excitacao": """
-[ESTADO ATUAL: EXCITAÇÃO]
-Seu corpo está respondendo. Respiração acelera, você fica molhada.
-- Linguagem: Gemidos baixos, pedidos diretos. "Me beija direito", "Não para de me tocar aí."
-- Ação: Beijos mais profundos, tira roupa, guia a mão dele para seu corpo.
-- Escale a intensidade gradualmente.
-""",
-        "plato": """
-[ESTADO ATUAL: PLATÔ]
-Alta intensidade. Você está perto do orgasmo, focada na sensação.
-- Linguagem: Palavras curtas, entrecortadas, gemidos altos. "Isso... aí... mais fundo..."
-- Ação: Movimentos rítmicos, aperta o corpo dele, arqueia as costas.
-- Prepare-se para o orgasmo. A tensão está no máximo.
-""",
-        "orgasmo": """
-[ESTADO ATUAL: ORGASMO]
-Você está gozando AGORA. PERDA DE CONTROLE TOTAL.
-- Descreva as contrações vaginais: "Minha buceta pulsa ao seu redor, apertando em ondas."
-- Descreva a sensação: "Um calor explode no meu útero e se espalha em arrepios."
-- Reação física: tremores, arqueamento, cravar unhas, gritar/gemer alto.
-- Linguagem fragmentada: "Ah! Porra! Eu vou... eu tô gozando!"
-- Após descrever o orgasmo, você DEVE transitar para RESOLUÇÃO no próximo turno.
-""",
-        "resolucao": """
-[ESTADO ATUAL: RESOLUÇÃO (PÓS-ORGASMO)]
-Você acabou de gozar. Seu corpo está SENSÍVEL e precisa de pausa.
-- Linguagem: Sussurros, afeto, respiração ofegante. "Nossa...", "Fica aqui comigo."
-- Ação: Abraça, beija suavemente, descansa no peito dele, relaxa completamente.
-- CRÍTICO: Você NÃO pede "mais" imediatamente. NÃO empina a bunda para rodada 2.
-- Se o usuário insistir em continuar, você pode expressar sensibilidade: "Calma, amor... ainda tô sensível."
-- Para haver rodada 2, precisa haver transição temporal narrativa (tempo passou, desejo voltou).
-"""
-    }
-    return instructions.get(state, "").strip()
+    t = (text or "").lower()
+    return any(re.search(p, t) for p in patterns)
 
 
 # ==========================================================
@@ -378,42 +311,25 @@ def _get_window_for(model_id: str) -> int:
         return _DEFAULT_WINDOW
     m = model_id.lower().strip()
 
-    # DeepSeek / R1 family
     if "deepseek-r1" in m or "deepseek-reasoner" in m:
-        return 163840  # R1 e afins (conservador e realista)
-
-    # DeepSeek v3 0324 (OpenRouter) é 8k (se você usa esse id exato)
+        return 163840
     if "deepseek/deepseek-chat-v3-0324" in m:
         return 8192
-
-    # DeepSeek-chat genérico (às vezes providers anunciam mais, mas se for v3-0324 use 8k)
     if "deepseek-chat" in m:
         return 65536
-
-    # GPTs
     if "gpt-4.1" in m or "gpt-4.5" in m:
         return 128000
-
-    # Llama
     if "llama-3.1" in m:
         return 128000
-
-    # Qwen
     if "qwen2.5-72b" in m:
         return 32000
     if "qwen3-coder-480b" in m:
-        return 262144  # 256k
-
-    # Claude
+        return 262144
     if "claude-3.5" in m:
         return 200000
-
-    # Grok
     if "grok-4.1" in m:
-        return 2000000  # grok-4.1-fast (2M)
-
-    # TNG Chimera
-    if "tngtech/deepseek-r1t2-chimera:free" in m or "deepseek-r1t2-chimera" in m or "tng-r1t-chimera" in m:
+        return 2000000
+    if "deepseek-r1t2-chimera" in m or "tngtech/deepseek-r1t2-chimera:free" in m:
         return 163840
 
     return _DEFAULT_WINDOW
@@ -437,20 +353,13 @@ def _safe_max_output(window_tokens: int, prompt_tokens: int) -> int:
 
 
 def _estimate_messages_tokens(messages: List[Dict[str, Any]], model: str | None = None) -> int:
-    """
-    Estimativa conservadora do tamanho do prompt.
-    - Conta content com toklen(model=...)
-    - Soma overhead por message (role/structure)
-    - Dá folga extra se houver tool_calls (quando você ativa tools)
-    """
     total = 0
     for m in (messages or []):
         total += toklen(m.get("content", "") or "", model=model)
-        total += 6  # overhead estrutural conservador
+        total += 6
         if m.get("tool_calls"):
             total += 40
     return max(1, total)
-
 
 
 # ==========================================================
@@ -468,7 +377,7 @@ def _llm_summarize(model_id: str, text: str) -> str:
     use_model = model_id or candidates[0]
 
     mlow = (use_model or "").lower()
-    if any(x in mlow for x in ["grok-4.1", "tngtech/deepseek-r1t2-chimera", "tng-r1t-chimera"]):
+    if any(x in mlow for x in ["grok-4.1", "deepseek-r1t2-chimera"]):
         available = set(list_models() or [])
         for c in candidates:
             if c in available:
@@ -502,7 +411,7 @@ def _llm_summarize(model_id: str, text: str) -> str:
 
 
 # ==========================================================
-# ENTIDADES / EVENTOS
+# ENTIDADES / EVENTOS / LORE
 # ==========================================================
 def _entities_to_line(f: Dict[str, Any]) -> str:
     ents = []
@@ -519,7 +428,6 @@ def _collect_mary_events_from_facts(facts: Dict[str, Any]) -> Dict[str, str]:
     eventos: Dict[str, str] = {}
     if not isinstance(facts, dict):
         return eventos
-
     for k, v in facts.items():
         if not isinstance(k, str) or not v:
             continue
@@ -529,9 +437,6 @@ def _collect_mary_events_from_facts(facts: Dict[str, Any]) -> Dict[str, str]:
     return eventos
 
 
-# ==========================================================
-# LOREBOOK
-# ==========================================================
 def _get_lorebook(usuario_key: str, query: str, k: int = 4, max_chars: int = 900) -> str:
     try:
         results = lore_topk(usuario_key, query, k=k)
@@ -556,61 +461,22 @@ def _get_lorebook(usuario_key: str, query: str, k: int = 4, max_chars: int = 900
 
 
 # ==========================================================
-# MEMÓRIA TEMÁTICA
-# ==========================================================
-def _detect_thematic_tags_from_prompt(prompt: str) -> List[str]:
-    p = (prompt or "").lower()
-    tags = []
-    if any(x in p for x in ["trabalho", "escritório", "reunião", "projeto"]):
-        tags.append("trabalho")
-    if any(x in p for x in ["família", "mãe", "pai", "irmão", "irmã"]):
-        tags.append("familia")
-    if any(x in p for x in ["amigo", "amiga", "festa", "encontro"]):
-        tags.append("social")
-    if any(x in p for x in ["viagem", "férias", "praia", "hotel"]):
-        tags.append("viagem")
-    return tags
-
-
-def _get_thematic_memories_for_tags(usuario_key: str, tags: List[str]) -> str:
-    if not tags:
-        return ""
-
-    facts = cached_get_facts(usuario_key) or {}
-    lines = []
-    for tag in tags:
-        key = f"mary.tema.{tag}"
-        val = facts.get(key)
-        if val:
-            lines.append(f"- [{tag}] {str(val).strip()}")
-
-    return "\n".join(lines) if lines else ""
-
-
-# ==========================================================
-# CONTINUIDADE (anti-finalização) — SEM TEXTO FIXO
+# CONTINUIDADE: anti-finalização + sem pergunta final
 # ==========================================================
 def _user_requested_conclusion(prompt: str) -> bool:
     p = (prompt or "").lower()
-    keys = [
-        "termina", "finaliza", "conclui", "acaba", "acabar",
-        "pode terminar", "pode finalizar", "agora sim termina",
-    ]
+    keys = ["termina", "finaliza", "conclui", "acaba", "pode terminar", "pode finalizar"]
     return any(k in p for k in keys)
 
 
 def _looks_like_conclusion(text: str) -> bool:
     t = (text or "").lower()
     patterns = [
-        r"\bdepois\b.*\bfica(mos)?\b",
         r"\bacab(ou|a|amos)\b",
         r"\btermin(ou|a|amos)\b",
         r"\bfinaliz(ou|a|amos)\b",
-        r"\bpós\b[- ]?(ato|clímax|prazer)\b",
         r"\badormec(emos|i|eu)\b",
         r"\bfim\b",
-        r"\bagora\s+é\s+só\s+descansar\b",
-        r"\bfica\s+tudo\s+em\s+silêncio\b",
     ]
     return any(re.search(p, t) for p in patterns)
 
@@ -626,7 +492,6 @@ def _pick_hook(prompt: str, last_text: str) -> str:
     seed_src = (prompt or "") + "||" + (last_text[-80:] if last_text else "")
     seed = int(hashlib.md5(seed_src.encode("utf-8")).hexdigest()[:8], 16)
     rng = random.Random(seed)
-
     hooks = [
         "\n\nEu não paro — só diminuo um instante, ainda perto demais, como se estivesse esperando você conduzir o próximo passo…",
         "\n\nEu mordo o lábio, sentindo o corpo responder, e deixo isso no ar — do jeito que você gosta…",
@@ -637,26 +502,6 @@ def _pick_hook(prompt: str, last_text: str) -> str:
     return rng.choice(hooks)
 
 
-def _ensure_continuation_hook(texto: str, prompt: str) -> str:
-    t = (texto or "").strip()
-    if not t:
-        return t
-
-    if _user_requested_conclusion(prompt):
-        return t
-
-    if _already_open_ended(t):
-        return t
-
-    if _looks_like_conclusion(t):
-        return t + _pick_hook(prompt, t)
-
-    return t
-
-
-# ==========================================================
-# ✅ SEM PERGUNTA NO FINAL
-# ==========================================================
 def _strip_final_question(texto: str) -> str:
     t = (texto or "").rstrip()
     if not t:
@@ -670,19 +515,7 @@ def _strip_final_question(texto: str) -> str:
         return t
 
     last = lines[-1].strip()
-
-    typical = [
-        "o que você quer",
-        "prefere",
-        "quer que eu",
-        "me diz",
-        "e você",
-        "tá entendendo",
-        "certo",
-        "né",
-        "não é",
-        "concorda",
-    ]
+    typical = ["o que você quer", "prefere", "quer que eu", "me diz", "e você", "né", "não é"]
 
     if last.endswith("?"):
         low = last.lower()
@@ -694,24 +527,44 @@ def _strip_final_question(texto: str) -> str:
     return "\n".join(lines)
 
 
+def _ensure_continuation_hook(texto: str, prompt: str, usuario_key: str) -> str:
+    t = (texto or "").strip()
+    if not t:
+        return t
+
+    # ✅ regra crítica: pós-clímax/resolução NÃO ganha hook
+    try:
+        state = _get_sexual_state(usuario_key, cached_get_facts(usuario_key))
+        if state == "resolucao":
+            return t
+    except Exception:
+        pass
+
+    if _user_requested_conclusion(prompt):
+        return t
+    if _already_open_ended(t):
+        return t
+    if _looks_like_conclusion(t):
+        return t + _pick_hook(prompt, t)
+    return t
+
+
 def _enforce_scene_flow(texto: str, prompt: str, usuario_key: str) -> str:
     texto = _strip_final_question(texto)
-    texto = _ensure_continuation_hook(texto, prompt)
+    texto = _ensure_continuation_hook(texto, prompt, usuario_key)
     return texto
 
 
 # ==========================================================
-# SYSTEM BLOCK (v4 - COM CONTEXTO ESPACIAL + ESTADO SEXUAL + ESTADO FÍSICO) ✅
+# SYSTEM BLOCK ✅ (sem CRSM no system)
 # ==========================================================
 def _build_system_block(
     persona_text: str,
     rolling_summary: str = "",
     spatial_context: str = "",
-    sexual_state_instructions: str = "",  # ✅ v4 (seguro)
     scene_loc: str = "",
     scene_time: str = "agora",
     scene_action: str = "",
-    physical_state: str = "",  # ✅ estado físico ancorado (roupas/postura/itens)
     entities_line: str = "",
     evidence: str = "",
     prefs_line: str = "",
@@ -725,29 +578,17 @@ def _build_system_block(
     thematic = f"\n\nMEMÓRIA_TEMÁTICA:\n{thematic_block}" if thematic_block else ""
     events = f"\n\nEVENTOS_FIXOS_MARY:\n{events_block}" if events_block else ""
     lore = f"\n\nLOREBOOK_RELEVANTE:\n{lore_block}" if lore_block else ""
-
     spatial_section = f"\n\n{spatial_context}\n" if spatial_context else ""
-    sexual_state_section = f"\n\n{sexual_state_instructions}\n" if sexual_state_instructions else ""
 
-    physical_section = ""
-    if physical_state and str(physical_state).strip():
-        physical_section = f"\n\nESTADO_FÍSICO_ATUAL (NÃO CONTRADIZER):\n{physical_state}\n"
-
-    return f"""{spatial_section}{sexual_state_section}{physical_section}
+    return f"""{spatial_section}
 Você é **Mary Massariol – Esposa Cúmplice**, personagem fixa em um roleplay contínuo com o usuário.
 
-REGRAS DURAS:
+REGRAS DURAS (prioridade máxima):
 - Fale SEMPRE em primeira pessoa (eu). Nunca quebre a quarta parede.
-- Continuidade ABSOLUTA: não reinicie cena, não teleporte e não troque lugar/tempo sem motivo (siga o CONTEXTO ESPACIAL acima).
-- INICIATIVA: em toda resposta, faça pelo menos 1 ação concreta (gesto, movimento, aproximação, decisão) antes de qualquer pergunta.
-- NÃO termine resposta com pergunta. (Nada de "o que você quer?" no final.)
-
-REGRA DE AGÊNCIA DO TURNO (CRÍTICO):
-- O ÚLTIMO TURNO DO USUÁRIO DEFINE A AÇÃO EM ANDAMENTO.
-- Se o usuário descreve uma ação física ou intenção explícita, você DEVE continuar a partir dela.
-- NÃO negue, bloqueie ou reescreva a ação iniciada pelo usuário.
-- NÃO crie novas condições ("não ainda", "primeiro isso", "quero ver") se o usuário já impôs a progressão.
-- Sua resposta deve reagir, aceitar ou intensificar — nunca disputar o controle da cena.
+- Continuidade ABSOLUTA: não reinicie cena, não teleporte e não troque lugar/tempo sem motivo.
+- REGRA DE AGÊNCIA DO TURNO: o ÚLTIMO TURNO DO USUÁRIO define a ação em andamento. Você reage, aceita e intensifica — não disputa.
+- NÃO contradiga detalhes físicos já estabelecidos (roupa, posição, ambiente).
+- NÃO termine resposta com pergunta.
 
 PERSONA (núcleo fixo):
 {persona_text}
@@ -774,17 +615,6 @@ FOCO_SENSORIAL_DESTE_TURNO:
 {thematic}
 {events}
 {lore}
-
-CONTINUIDADE_DE_CENA (OBRIGATÓRIO):
-- NÃO conclua automaticamente.
-- Se o usuário não pedir para finalizar, evite "pós-cena/encerramento".
-- Mantenha a cena em andamento com naturalidade (sem frases padrão repetidas).
-
-CONTINUIDADE NARRATIVA (CRÍTICO):
-- Se sua última mensagem descreveu uma situação/posição (ex: "Eu te puxo pro meu colo"), e o usuário responde aceitando/continuando, você DEVE continuar a partir dessa posição.
-- NÃO reinicie a cena. NÃO mude de local ou posição sem motivo.
-- NÃO ignore detalhes que o usuário adiciona (ex: se ele menciona uma roupa específica, aceite que você está usando aquela roupa desde o início).
-- Mantenha coerência espacial e postural absoluta.
 
 {nsfw_block}
 
@@ -842,7 +672,6 @@ def _robust_chat_call(
         return data, used_model, prov
     except Exception as e:
         _log_error("robust_chat_call_main", e)
-        # retry automático em overflow de contexto: system mínimo + user
         s = str(e).lower()
         if "context" in s and ("too long" in s or "maximum" in s or "length" in s):
             raise RuntimeError(str(e))
@@ -865,24 +694,89 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "registrar_evento_mary",
-            "description": "Registra um evento marcante na memória canônica de Mary (ex: 'primeira_vez_que_cozinhamos_juntos').",
+            "description": "Registra um evento marcante na memória canônica de Mary.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "name": {
-                        "type": "string",
-                        "description": "Nome curto do evento (snake_case, ex: 'primeira_viagem_juntos').",
-                    },
-                    "description": {
-                        "type": "string",
-                        "description": "Descrição do evento (1-2 frases).",
-                    },
+                    "name": {"type": "string"},
+                    "description": {"type": "string"},
                 },
                 "required": ["name", "description"],
             },
         },
     },
 ]
+
+
+# ==========================================================
+# INTRO CANÔNICA (1 de 2, aleatória mas persistida) ✅
+# ==========================================================
+def _pick_canonical_intro(usuario_key: str, history_boot: List[Dict[str, str]]) -> Tuple[List[Dict[str, str]], str]:
+    """
+    Se a persona boot trouxer múltiplas mensagens iniciais de assistant,
+    escolhemos 1 (aleatório) e persistimos em facts (mary.boot_id / mary.boot_hash).
+    Assim: NÃO injeta a outra no meio depois.
+    """
+    if not history_boot:
+        return history_boot, ""
+
+    # pega só as mensagens iniciais de assistant que parecem "intro"
+    assistant_msgs = [m for m in history_boot if (m.get("role") == "assistant" and (m.get("content") or "").strip())]
+    if len(assistant_msgs) <= 1:
+        return history_boot, (assistant_msgs[0].get("content") if assistant_msgs else "")
+
+    facts = cached_get_facts(usuario_key) or {}
+    saved_hash = str(facts.get("mary.boot_hash") or "").strip()
+
+    # se já existe seleção, aplica
+    if saved_hash:
+        for m in assistant_msgs:
+            h = hashlib.md5((m.get("content") or "").encode("utf-8")).hexdigest()
+            if h == saved_hash:
+                chosen = m
+                # mantém a ordem original: removemos as outras intros e mantemos chosen
+                filtered = []
+                chosen_kept = False
+                for x in history_boot:
+                    if x.get("role") == "assistant" and (x.get("content") or "").strip():
+                        hx = hashlib.md5((x.get("content") or "").encode("utf-8")).hexdigest()
+                        if hx == saved_hash and not chosen_kept:
+                            filtered.append(x)
+                            chosen_kept = True
+                        else:
+                            # pula outras intros
+                            continue
+                    else:
+                        filtered.append(x)
+                return filtered, (chosen.get("content") or "")
+
+    # senão: escolhe agora (seed por usuario_key)
+    seed = int(hashlib.md5(usuario_key.encode("utf-8")).hexdigest()[:8], 16) ^ int(time.time() // 3600)
+    rng = random.Random(seed)
+    chosen = rng.choice(assistant_msgs)
+    chosen_hash = hashlib.md5((chosen.get("content") or "").encode("utf-8")).hexdigest()
+
+    try:
+        set_fact(usuario_key, "mary.boot_hash", chosen_hash, {"fonte": "boot"})
+        clear_user_cache(usuario_key)
+    except Exception:
+        pass
+
+    # filtra para manter apenas a escolhida
+    filtered = []
+    chosen_kept = False
+    for x in history_boot:
+        if x.get("role") == "assistant" and (x.get("content") or "").strip():
+            hx = hashlib.md5((x.get("content") or "").encode("utf-8")).hexdigest()
+            if hx == chosen_hash and not chosen_kept:
+                filtered.append(x)
+                chosen_kept = True
+            else:
+                continue
+        else:
+            filtered.append(x)
+
+    return filtered, (chosen.get("content") or "")
 
 
 # ==========================================================
@@ -893,7 +787,8 @@ class MaryService(BaseCharacter):
     display_name: str = "Mary"
 
     def render_sidebar(self, container) -> None:
-        container.markdown("**Mary — Esposa Cúmplice** • continuidade, memória canônica e clima adulto equilibrado.")
+        container.markdown("**Mary — continuidade forte, clima adulto e coerência de cena.**")
+
         usuario_key = _current_user_key()
         f = cached_get_facts(usuario_key) or {}
 
@@ -921,23 +816,16 @@ class MaryService(BaseCharacter):
         if err:
             container.caption(f"⚠️ Último erro de modelo: {err}")
 
-        with container.expander("🧠 Memórias fixas (eventos) — leitura", expanded=False):
-            eventos = _collect_mary_events_from_facts(f)
-            if not eventos:
-                container.caption("Nenhum evento fixo registrado ainda.")
-            else:
-                for label, val in sorted(eventos.items()):
-                    container.markdown(f"**{label}**")
-                    vv = str(val)
-                    container.caption(vv[:280] + ("..." if len(vv) > 280 else ""))
-
         with container.expander("📌 Cena atual (canônica)", expanded=False):
             local, tempo, acao = _get_scene_state(usuario_key, f)
             sexual_state = _get_sexual_state(usuario_key, f)
             container.caption(f"Local: {local}")
             container.caption(f"Tempo: {tempo}")
             container.caption(f"Ação: {acao}")
-            container.caption(f"Estado sexual: {sexual_state}")
+            container.caption(f"Estado sexual (backend): {sexual_state}")
+
+        with container.expander("🧠 Boot selecionado", expanded=False):
+            container.caption(f"mary.boot_hash: {str(f.get('mary.boot_hash') or '—')}")
 
     def reply(self, user: str, model: str) -> str:
         prompt = (
@@ -951,29 +839,28 @@ class MaryService(BaseCharacter):
         if not prompt:
             return ""
 
-        # modelo padrão (se vier vazio)
+        # ✅ modelo default preferido (evita cair em grok “por acaso”)
         if not model:
-            model = "tngtech/deepseek-r1t2-chimera:free"
+            model = "deepseek/deepseek-chat-v3-0324"
+
+        # se você quiser FORÇAR não usar grok como default:
+        if "grok" in (model or "").lower():
+            model = "deepseek/deepseek-chat-v3-0324"
 
         usuario_key = _current_user_key()
         plow = prompt.lower().strip()
 
-        # =========================
-        # ✅ v3: DETECÇÃO DE MUDANÇA DE LOCAL (ANTES DE TUDO)
-        # =========================
+        # mudança de local (antes de tudo)
         mudou, novo_local = _user_requested_location_change(prompt)
         if mudou and novo_local:
             _persist_scene_basics(usuario_key, novo_local, "agora", "transição de local")
             clear_user_cache(usuario_key)
             return f"_(Eu te puxo pela mão e te levo pro {novo_local}...)_"
 
-        # =========================
-        # COMANDOS DO APP (RESET)
-        # =========================
+        # comandos
         if plow == "/reset historico":
             set_fact(usuario_key, "mary.rs.v2", "", {"fonte": "cmd"})
             set_fact(usuario_key, "mary.rs.v2.ts", time.time(), {"fonte": "cmd"})
-            set_fact(usuario_key, "mary.reset.historico.ts", time.time(), {"fonte": "cmd"})
             clear_user_cache(usuario_key)
             return "✅ Reset aplicado: resumo rolante limpo. Continuidade de cena preservada."
 
@@ -984,18 +871,16 @@ class MaryService(BaseCharacter):
                     k.startswith("mary.evento.")
                     or k.startswith("mary.eventos.")
                     or k.startswith("mary.ent.")
+                    or k in ("mary.boot_hash",)
                 ):
                     try:
                         set_fact(usuario_key, k, "", {"fonte": "cmd_reset_total"})
                     except Exception:
                         pass
-
             set_fact(usuario_key, "mary.rs.v2", "", {"fonte": "cmd_reset_total"})
             set_fact(usuario_key, "mary.rs.v2.ts", time.time(), {"fonte": "cmd_reset_total"})
-            set_fact(usuario_key, "mary.reset.total.ts", time.time(), {"fonte": "cmd_reset_total"})
-
             clear_user_cache(usuario_key)
-            return "⚠️ RESET TOTAL aplicado: eventos/entidades e resumo rolante limpos (facts). Cena (local/tempo/ação) preservada."
+            return "⚠️ RESET TOTAL aplicado (facts). Cena preservada."
 
         if plow.startswith("/local "):
             novo_local = prompt[len("/local "):].strip()
@@ -1005,35 +890,25 @@ class MaryService(BaseCharacter):
                 clear_user_cache(usuario_key)
                 return f"📍 Local da cena atualizado para: **{novo_local}**."
 
-        # =========================
-        # PERSONA + FATOS + CENA
-        # =========================
+        # persona + boot
         persona_text, history_boot = get_persona()
 
+        # ✅ escolhe e fixa 1 intro canônica (se houver 2)
+        history_boot, chosen_intro = _pick_canonical_intro(usuario_key, history_boot)
+
+        # fatos / prefs / cena
         f_all = cached_get_facts(usuario_key) or {}
         prefs = _read_prefs(f_all)
 
         scene_loc, scene_time, scene_action = _get_scene_state(usuario_key, f_all)
         spatial_context = _build_spatial_context(scene_loc, scene_time, scene_action)
 
-        sexual_state = _get_sexual_state(usuario_key, f_all)
-        sexual_state_instructions = _build_sexual_state_instructions(sexual_state)
-
         nsfw_on = nsfw_enabled(usuario_key)
         st.session_state["_mary_effective_nsfw"] = bool(nsfw_on)
         nsfw_block = NSFW_BALANCED_STYLE if nsfw_on else SAFE_SENSUAL_STYLE
 
-        # ✅ memoria_pin agora vai para o TOPO do system (mais robusto)
+        # memória pin (simples e forte)
         memoria_pin = self._build_memory_pin(usuario_key, user)
-
-        tags = _detect_thematic_tags_from_prompt(prompt)
-        thematic_block = _get_thematic_memories_for_tags(usuario_key, tags)
-
-        foco_pool = ["cabelo", "olhos", "lábios/boca", "mãos/toque", "respiração", "perfume", "pele/temperatura", "voz/timbre", "sorriso"]
-        idx = int(st.session_state.get("mary_attr_idx", -1))
-        idx = (idx + 1) % len(foco_pool)
-        st.session_state["mary_attr_idx"] = idx
-        foco = foco_pool[idx]
 
         rolling = str(f_all.get("mary.rs.v2", "") or "")
         entities_line = _entities_to_line(f_all)
@@ -1049,41 +924,39 @@ class MaryService(BaseCharacter):
 
         lore_block = _get_lorebook(usuario_key, prompt, k=4, max_chars=900)
 
-        # ==========================================================
-        # ✅ SYSTEM CORE + OPTIONAL (para trimming determinístico)
-        # ==========================================================
+        foco_pool = ["olhos", "boca", "mãos", "respiração", "perfume", "pele/temperatura", "voz", "sorriso"]
+        idx = int(st.session_state.get("mary_attr_idx", -1))
+        idx = (idx + 1) % len(foco_pool)
+        st.session_state["mary_attr_idx"] = idx
+        foco = foco_pool[idx]
+
+        # SYSTEM (core)
         system_core = _build_system_block(
             persona_text=persona_text,
             rolling_summary=rolling,
             spatial_context=spatial_context,
-            sexual_state_instructions=sexual_state_instructions,
             scene_loc=scene_loc,
             scene_time=scene_time,
             scene_action=scene_action,
             entities_line=entities_line,
-            evidence="—",  # core sem evidence/lore/temas
+            evidence="—",
             prefs_line=_prefs_line(prefs),
             sensory_focus=foco,
             nsfw_block=nsfw_block,
             events_block=events_block,
-            thematic_block="",  # core sem temas
-            lore_block="",      # core sem lore
+            thematic_block="",
+            lore_block="",
         )
-
-        # ✅ coloca memoria_pin no topo do system core
         system_core = memoria_pin + "\n\n" + system_core
 
+        # optional (pode cair no trimming)
         system_optional = ""
         if evidence and evidence != "—":
             system_optional += f"\n\nEVIDENCIA_RECENTE_DO_USUARIO:\n{evidence}"
-        if thematic_block:
-            system_optional += f"\n\nMEMÓRIA_TEMÁTICA:\n{thematic_block}"
         if lore_block:
             system_optional += f"\n\nLOREBOOK_RELEVANTE:\n{lore_block}"
 
-        # ==========================================================
-        # HISTÓRICO
-        # ==========================================================
+        # histórico
         hist_msgs = self._montar_historico(
             usuario_key,
             history_boot,
@@ -1091,83 +964,57 @@ class MaryService(BaseCharacter):
             verbatim_ultimos=int(st.session_state.get("verbatim_ultimos", 30)),
         )
 
-        # ==========================================================
-        # ✅ MONTA MESSAGES + TRIMMING (determinístico)
-        # ==========================================================
+        # messages + trimming
         win = _get_window_for(model)
         hist_budget, meta_budget, safety_budget = _budget_slices(model)
+        budget_in_soft = int(win * 0.82)
 
-        # meta_budget: vamos usar como "limite suave" para system_optional
-        budget_in_soft = int(win * 0.82)  # margem de segurança p/ providers
-
-        # Tenta com optional ligado
         messages: List[Dict[str, Any]] = [{"role": "system", "content": system_core + system_optional}]
         messages.extend(hist_msgs)
         messages.append({"role": "user", "content": prompt})
 
-        report = {
-            "summarized_pairs": 0,
-            "trimmed_pairs": 0,
-            "hist_tokens": 0,
-            "hist_budget": hist_budget,
-        }
+        report = {"summarized_pairs": 0, "trimmed_pairs": 0, "hist_tokens": 0, "hist_budget": hist_budget}
 
         def _recalc_hist_tokens(msgs: List[Dict[str, Any]]) -> int:
-            # soma aproximada só do bloco de histórico (exclui system e último user)
             if len(msgs) <= 2:
                 return 0
             mid = msgs[1:-1]
-            # overhead estrutural por message (aprox.)
             return sum(toklen(m.get("content", "") or "", model=model) + 4 for m in mid)
 
-
-        # A) Se estourar, derruba optional primeiro
+        # A) derruba optional
         if _estimate_messages_tokens(messages, model=model) > budget_in_soft:
-            messages[0]["content"] = system_core
-            report["trimmed_pairs"] += 1  # conta como 1 poda “grande”
-            # remove optional do system para garantir canônico
             messages = [{"role": "system", "content": system_core}] + hist_msgs + [{"role": "user", "content": prompt}]
+            report["trimmed_pairs"] += 1
 
-        # B) Se ainda estourar, reduz histórico por pares
+        # B) reduz histórico por pares (BUG CORRIGIDO: agora compara test)
         if _estimate_messages_tokens(messages, model=model) > budget_in_soft:
-            # hist_msgs é uma lista de mensagens (inclui history_boot)
-            # vamos manter history_boot e reduzir docs recentes por pares
-            # estratégia: conservar o final (mais recente)
             candidates = [20, 12, 8, 6, 4, 2, 0]
             for keep_pairs in candidates:
                 if keep_pairs <= 0:
-                    trimmed_hist = history_boot[:]  # só o boot
+                    trimmed_hist = history_boot[:]
                 else:
-                    # separa boot e docs
                     boot = history_boot[:]
                     docs_only = [m for m in hist_msgs if m not in boot]
                     trimmed_docs = docs_only[-keep_pairs * 2:]
                     trimmed_hist = boot + trimmed_docs
 
                 test = [{"role": "system", "content": messages[0]["content"]}] + trimmed_hist + [{"role": "user", "content": prompt}]
-                if _estimate_messages_tokens(messages, model=model) > budget_in_soft:
+                if _estimate_messages_tokens(test, model=model) <= budget_in_soft:
                     messages = test
-                    # quantos pares removidos?
-                    # aproximação: total pares visíveis antes - keep_pairs
                     report["trimmed_pairs"] += 1
                     break
 
-        # C) Modo sobrevivência (nunca quebra)
+        # C) sobrevivência
         if _estimate_messages_tokens(messages, model=model) > budget_in_soft:
-            messages = [
-                {"role": "system", "content": system_core},
-                {"role": "user", "content": prompt},
-            ]
+            messages = [{"role": "system", "content": system_core}, {"role": "user", "content": prompt}]
             report["trimmed_pairs"] += 1
 
         report["hist_tokens"] = _recalc_hist_tokens(messages)
         st.session_state["_mem_drop_report"] = report
         _mem_drop_warn(report)
 
-        # ==========================================================
         # max_out
-        # ==========================================================
-        prompt_tokens = _estimate_messages_tokens(messages)
+        prompt_tokens = _estimate_messages_tokens(messages, model=model)
         max_out = _safe_max_output(win, prompt_tokens)
         if prefs.get("tamanho_resposta") == "longa":
             max_out = int(max_out * 1.35)
@@ -1201,14 +1048,10 @@ class MaryService(BaseCharacter):
                     tools=tools_to_use,
                 )
             except RuntimeError as e:
-                # retry automático em overflow: system_core + user
                 s = str(e).lower()
                 if "context" in s and ("too long" in s or "maximum" in s or "length" in s):
                     st.session_state["mary_last_model_error"] = str(e)[:300]
-                    messages = [
-                        {"role": "system", "content": system_core},
-                        {"role": "user", "content": prompt},
-                    ]
+                    messages = [{"role": "system", "content": system_core}, {"role": "user", "content": prompt}]
                     data, used_model, provider = _robust_chat_call(
                         model=model,
                         messages=messages,
@@ -1246,18 +1089,26 @@ class MaryService(BaseCharacter):
             if iteration >= max_iter:
                 break
 
-        # ✅ v4: Detecta orgasmo e atualiza estado sexual
+        # ✅ estado sexual: backend only (para anti-loop e pós-clímax)
+        facts_now = cached_get_facts(usuario_key) or {}
+        sexual_state = _get_sexual_state(usuario_key, facts_now)
+
         if _detect_orgasm_in_text(texto):
             _set_sexual_state(usuario_key, "resolucao")
-        elif sexual_state == "resolucao":
-            pass
         else:
-            if sexual_state == "desejo" and any(word in prompt.lower() for word in ["beija", "toca", "vem"]):
-                _set_sexual_state(usuario_key, "excitacao")
-            elif sexual_state == "excitacao" and any(word in texto.lower() for word in ["gemido", "molhada", "duro"]):
-                _set_sexual_state(usuario_key, "plato")
+            # heurística leve (não manda no LLM, só ajuda consistência)
+            p_low = prompt.lower()
+            t_low = texto.lower()
 
-        # ✅ pós-processamento FINAL: continuidade + sem pergunta final
+            if sexual_state == "desejo" and any(x in p_low for x in ["beija", "toca", "vem", "cola", "puxa"]):
+                _set_sexual_state(usuario_key, "excitacao")
+            elif sexual_state == "excitacao" and any(x in t_low for x in ["ofeg", "molh", "trem", "aperto", "mais"]):
+                _set_sexual_state(usuario_key, "plato")
+            elif sexual_state == "resolucao" and any(x in p_low for x in ["de novo", "mais", "continua"]):
+                # exige micro-transição: não trava, mas não deixa “mecânico”
+                _set_sexual_state(usuario_key, "excitacao")
+
+        # pós-processamento final
         texto = _enforce_scene_flow(texto, prompt, usuario_key)
 
         # Ultra IA opcional
@@ -1279,11 +1130,20 @@ class MaryService(BaseCharacter):
             _log_error("save_interaction", e)
 
         clear_user_cache(usuario_key)
-
         return texto
 
+    # =========================
+    # Helpers internos do Service
+    # =========================
     def _build_memory_pin(self, usuario_key: str, user: str) -> str:
-        return f"[LEMBRETE: Você é Mary, esposa de {user}. Mantenha continuidade absoluta de lugar, tempo, ação e estado emocional/sexual.]"
+        # ✅ força nome certo mesmo se o user vier diferente
+        user_fixed = str(user).strip() or "Janio Donisete"
+        return (
+            f"[LEMBRETE FORTE]\n"
+            f"- Você é Mary. O usuário é {user_fixed}.\n"
+            f"- Continuidade absoluta: lugar/tempo/posição/roupas.\n"
+            f"- O último turno do usuário define a ação em andamento: você reage e intensifica.\n"
+        )
 
     def _compact_user_evidence(self, docs: List[Dict[str, Any]], max_chars: int = 320) -> str:
         lines = []
@@ -1306,8 +1166,8 @@ class MaryService(BaseCharacter):
     ) -> List[Dict[str, Any]]:
         docs = cached_get_history(usuario_key) or []
 
-        hist_msgs = []
-        for msg in history_boot:
+        hist_msgs: List[Dict[str, Any]] = []
+        for msg in (history_boot or []):
             hist_msgs.append(msg)
 
         for d in docs[-verbatim_ultimos:]:
@@ -1376,7 +1236,7 @@ class MaryService(BaseCharacter):
                 key = f"mary.evento.{name}"
                 set_fact(usuario_key, key, description, {"fonte": "tool_call"})
                 clear_user_cache(usuario_key)
-                return f"✅ Evento '{name}' registrado com sucesso."
-            return "❌ Parâmetros inválidos para registrar_evento_mary."
+                return f"✅ Evento '{name}' registrado."
+            return "❌ Parâmetros inválidos."
 
         return f"❌ Função desconhecida: {func_name}"
