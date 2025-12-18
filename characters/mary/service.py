@@ -202,6 +202,7 @@ def _read_prefs(facts: Dict[str, Any]) -> Dict[str, str]:
 
 def _prefs_line(prefs: Dict[str, str]) -> str:
     return f"ritmo={prefs.get('ritmo')}; tamanho_resposta={prefs.get('tamanho_resposta')}"
+    
 
 
 # ==========================================================
@@ -435,14 +436,21 @@ def _safe_max_output(window_tokens: int, prompt_tokens: int) -> int:
     return max(512, max_out)
 
 
-def _estimate_messages_tokens(messages: List[Dict[str, Any]]) -> int:
-    # heurística: conteúdo + role + overhead estrutural
+def _estimate_messages_tokens(messages: List[Dict[str, Any]], model: str | None = None) -> int:
+    """
+    Estimativa conservadora do tamanho do prompt.
+    - Conta content com toklen(model=...)
+    - Soma overhead por message (role/structure)
+    - Dá folga extra se houver tool_calls (quando você ativa tools)
+    """
     total = 0
-    for m in messages:
-        total += toklen(m.get("role", "") or "")
-        total += toklen(m.get("content", "") or "")
-        total += 8
-    return total
+    for m in (messages or []):
+        total += toklen(m.get("content", "") or "", model=model)
+        total += 6  # overhead estrutural conservador
+        if m.get("tool_calls"):
+            total += 40
+    return max(1, total)
+
 
 
 # ==========================================================
@@ -1096,17 +1104,19 @@ class MaryService(BaseCharacter):
             if len(msgs) <= 2:
                 return 0
             mid = msgs[1:-1]
-            return sum(toklen(m.get("content", "") or "") for m in mid)
+            # overhead estrutural por message (aprox.)
+            return sum(toklen(m.get("content", "") or "", model=model) + 4 for m in mid)
+
 
         # A) Se estourar, derruba optional primeiro
-        if _estimate_messages_tokens(messages) > budget_in_soft:
+        if _estimate_messages_tokens(messages, model=model) > budget_in_soft:
             messages[0]["content"] = system_core
             report["trimmed_pairs"] += 1  # conta como 1 poda “grande”
             # remove optional do system para garantir canônico
             messages = [{"role": "system", "content": system_core}] + hist_msgs + [{"role": "user", "content": prompt}]
 
         # B) Se ainda estourar, reduz histórico por pares
-        if _estimate_messages_tokens(messages) > budget_in_soft:
+        if _estimate_messages_tokens(messages, model=model) > budget_in_soft:
             # hist_msgs é uma lista de mensagens (inclui history_boot)
             # vamos manter history_boot e reduzir docs recentes por pares
             # estratégia: conservar o final (mais recente)
@@ -1122,7 +1132,7 @@ class MaryService(BaseCharacter):
                     trimmed_hist = boot + trimmed_docs
 
                 test = [{"role": "system", "content": messages[0]["content"]}] + trimmed_hist + [{"role": "user", "content": prompt}]
-                if _estimate_messages_tokens(test) <= budget_in_soft:
+                if _estimate_messages_tokens(messages, model=model) > budget_in_soft:
                     messages = test
                     # quantos pares removidos?
                     # aproximação: total pares visíveis antes - keep_pairs
@@ -1130,7 +1140,7 @@ class MaryService(BaseCharacter):
                     break
 
         # C) Modo sobrevivência (nunca quebra)
-        if _estimate_messages_tokens(messages) > budget_in_soft:
+        if _estimate_messages_tokens(messages, model=model) > budget_in_soft:
             messages = [
                 {"role": "system", "content": system_core},
                 {"role": "user", "content": prompt},
