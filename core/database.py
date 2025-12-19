@@ -20,16 +20,6 @@ def set_backend(kind: str) -> None:
     kind = (kind or "").strip().lower()
     _BACKEND = "mongo" if kind == "mongo" else "memory"
 
-# Defaulta para mongo SOMENTE se conseguir conectar
-try:
-    if settings.mongo_uri():
-        _ensure_mongo()
-        if _MONGO_OK:
-            _BACKEND = "mongo"
-except Exception:
-    _BACKEND = "memory"
-
-
 # ===================== Implementação: Memória =====================
 _STORE: Dict[str, List[Dict[str, Any]]] = {}
 _LOCK = RLock()
@@ -286,6 +276,27 @@ class MongoCollection:
 
     def delete_many(self, filt: Dict[str, Any]) -> int:
         return self._col.delete_many(filt or {}).deleted_count
+
+    def _init_backend_from_settings() -> None:
+    global _BACKEND
+    desired = (getattr(settings, "DB_BACKEND", "") or os.getenv("DB_BACKEND", "")).strip().lower()
+    if desired == "mongo":
+        _ensure_mongo()
+        _BACKEND = "mongo" if _MONGO_OK else "memory"
+        return
+
+    # Se não foi explicitado e há URI válida, tenta mongo
+    if settings.mongo_uri():
+        _ensure_mongo()
+        if _MONGO_OK:
+            _BACKEND = "mongo"
+            return
+
+    _BACKEND = "memory"
+
+
+_init_backend_from_settings()
+
 
 # ===================== API pública =====================
 def get_col(name: str):
