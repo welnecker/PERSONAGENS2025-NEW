@@ -539,26 +539,26 @@ def main() -> None:
 
     # ===== BOOT =====
     if not st.session_state["chat_history"]:
-    backend_hist = _carregar_chat_visual_do_backend(force=False)
+        backend_hist = _carregar_chat_visual_do_backend(force=False)
 
-    if backend_hist:
-        st.session_state["chat_history"] = backend_hist
-        st.session_state["mary_intro_done"] = True
-    else:
-        # Confirma de verdade se NÃO existe histórico em nenhuma key
-        keys = _keys_para_mary()
-        has_any = False
-        for k in keys:
-            try:
-                if (get_history_docs(k, limit=1) or []):
-                    has_any = True
-                    break
-            except Exception as e:
-                st.session_state["last_model_error"] = f"BOOT history probe failed: {type(e).__name__}: {e}"
-                st.error("💥 Falha ao checar existência de histórico no backend.")
-                st.write("Key:", k)
-                st.code(traceback.format_exc())
-                st.stop()
+        if backend_hist:
+            st.session_state["chat_history"] = backend_hist
+            st.session_state["mary_intro_done"] = True
+        else:
+            # Confirma de verdade se NÃO existe histórico em nenhuma key
+            keys = _keys_para_mary()
+            has_any = False
+            for k in keys:
+                try:
+                    if (get_history_docs(k, limit=1) or []):
+                        has_any = True
+                        break
+                except Exception as e:
+                    st.session_state["last_model_error"] = f"BOOT history probe failed: {type(e).__name__}: {e}"
+                    st.error("💥 Falha ao checar existência de histórico no backend.")
+                    st.write("Key:", k)
+                    st.code(traceback.format_exc())
+                    st.stop()
 
         if has_any:
             st.warning("⚠️ Existe histórico no BD, mas o merge retornou vazio. Verifique get_history_docs_multi / filtros.")
