@@ -331,10 +331,16 @@ def _carregar_chat_visual_do_backend(force: bool = False) -> list[tuple[str, str
             return cached
 
     keys = _keys_para_mary()
+
     try:
         docs = get_history_docs_multi(keys, limit=800) or []
-    except Exception:
-        docs = []
+    except Exception as e:
+        st.session_state["last_model_error"] = f"BOOT history load failed: {type(e).__name__}: {e}"
+        st.error("💥 Falha ao carregar histórico do backend (isso causa o ‘reset’ no refresh).")
+        st.write("Chaves consultadas:", keys)
+        st.code(traceback.format_exc())
+        # IMPORTANTÍSSIMO: não finge que está vazio — retorna e deixa o app parar aqui
+        st.stop()
 
     hist: list[tuple[str, str]] = []
     for d in docs:
@@ -348,6 +354,7 @@ def _carregar_chat_visual_do_backend(force: bool = False) -> list[tuple[str, str
     st.session_state["backend_hist_cache"] = hist
     st.session_state["backend_hist_cache_ts"] = now
     return hist
+
 
 
 def _apagar_hist_bd_novo_e_legado() -> int:
@@ -532,13 +539,33 @@ def main() -> None:
 
     # ===== BOOT =====
     if not st.session_state["chat_history"]:
-        backend_hist = _carregar_chat_visual_do_backend(force=False)
-        if backend_hist:
-            st.session_state["chat_history"] = backend_hist
-            st.session_state["mary_intro_done"] = True
+    backend_hist = _carregar_chat_visual_do_backend(force=False)
+
+    if backend_hist:
+        st.session_state["chat_history"] = backend_hist
+        st.session_state["mary_intro_done"] = True
+    else:
+        # Confirma de verdade se NÃO existe histórico em nenhuma key
+        keys = _keys_para_mary()
+        has_any = False
+        for k in keys:
+            try:
+                if (get_history_docs(k, limit=1) or []):
+                    has_any = True
+                    break
+            except Exception as e:
+                st.session_state["last_model_error"] = f"BOOT history probe failed: {type(e).__name__}: {e}"
+                st.error("💥 Falha ao checar existência de histórico no backend.")
+                st.write("Key:", k)
+                st.code(traceback.format_exc())
+                st.stop()
+
+        if has_any:
+            st.warning("⚠️ Existe histórico no BD, mas o merge retornou vazio. Verifique get_history_docs_multi / filtros.")
         else:
             if not st.session_state.get("mary_intro_done", False):
                 _colar_fala_inicial_na_tela()
+
 
     # ===== RENDER =====
     hist = st.session_state.get("chat_history", [])
