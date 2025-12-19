@@ -20,11 +20,15 @@ def set_backend(kind: str) -> None:
     kind = (kind or "").strip().lower()
     _BACKEND = "mongo" if kind == "mongo" else "memory"
 
-# Se houver credenciais de Mongo e DB_BACKEND não foi explicitado, defaulta para mongo
-if settings.mongo_uri():
-    env_choice = os.getenv("DB_BACKEND", "").strip().lower()
-    if env_choice == "":
-        _BACKEND = "mongo"
+# Defaulta para mongo SOMENTE se conseguir conectar
+try:
+    if settings.mongo_uri():
+        _ensure_mongo()
+        if _MONGO_OK:
+            _BACKEND = "mongo"
+except Exception:
+    _BACKEND = "memory"
+
 
 # ===================== Implementação: Memória =====================
 _STORE: Dict[str, List[Dict[str, Any]]] = {}
@@ -283,23 +287,23 @@ class MongoCollection:
 
 # ===================== API pública =====================
 def get_col(name: str):
-    """Retorna uma coleção de acordo com o backend atual."""
     if get_backend() == "mongo":
-        try:
-            return MongoCollection(name)
-        except Exception:
-            # fallback duro para memória se Mongo falhar
-            return MemoryCollection(name)
+        _ensure_mongo()
+        if not _MONGO_OK:
+            raise RuntimeError("Mongo configurado mas indisponível.")
+        return MongoCollection(name)
     return MemoryCollection(name)
 
+
 def db_status() -> Tuple[str, str]:
-    """(backend, detalhe)"""
-    b = get_backend()
-    if b == "mongo":
+    if get_backend() == "mongo":
         _ensure_mongo()
-        detail = "OK" if _MONGO_OK else "indisponível"
-        return ("mongo", detail)
-    return ("memory", "memória local")
+        if _MONGO_OK:
+            return ("mongo", f"db={settings.APP_NAME}")
+        else:
+            return ("memory", "mongo configurado mas indisponível")
+    return ("memory", "memória local (RAM)")
+
 
 def ping_db() -> Tuple[str, bool, str]:
     """(backend, ok, detalhe) — faz um insert+read+delete na coleção 'diagnostic'."""
