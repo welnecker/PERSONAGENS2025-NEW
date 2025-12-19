@@ -10,7 +10,7 @@ import datetime as _dt
 from .config import settings
 
 # ===================== Estado global do backend =====================
-_BACKEND = (os.getenv("DB_BACKEND", "").strip().lower() or "memory")
+_BACKEND = (getattr(settings, "DB_BACKEND", "") or os.getenv("DB_BACKEND", "")).strip().lower() or "memory"
 
 def get_backend() -> str:
     return _BACKEND
@@ -235,7 +235,9 @@ def _ensure_mongo():
                 connectTimeoutMS=5000,
                 socketTimeoutMS=5000,
             )
-            _mongo_db = _mongo_client.get_database(settings.APP_NAME)
+            dbname = (getattr(settings, "MONGO_DB", "") or "").strip() or settings.APP_NAME
+            _mongo_db = _mongo_client.get_database(dbname)
+
             _MONGO_OK = True
         except Exception:
             _MONGO_OK = False
