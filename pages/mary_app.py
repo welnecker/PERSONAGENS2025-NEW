@@ -45,94 +45,105 @@ FALLBACK_MODEL = "deepseek/deepseek-chat-v3-0324"
 # ==========================================================
 def _apply_dark_ui() -> None:
     st.markdown(
-    """
-<style>
-/* =========================
-   ZERA TARJAS / FUNDO TOTAL
-   ========================= */
-html, body {
-  background: #0b0b0b !important;
-}
+        """
+        <style>
+        /* =========================
+           FUNDO TOTAL (mata tarjas)
+           ========================= */
+        html, body, #root, .stApp {
+            background: #0b0b0b !important;
+        }
 
-/* Container raiz */
-.stApp {
-  background: #0b0b0b !important;
-}
+        /* Containers internos do Streamlit (onde nasce a tarja) */
+        [data-testid="stAppViewContainer"],
+        [data-testid="stMain"],
+        [data-testid="stMainBlockContainer"],
+        section.main {
+            background: #0b0b0b !important;
+        }
 
-/* NOVO layout (Streamlit recente): containers internos que às vezes ficam brancos */
-div[data-testid="stAppViewContainer"]{
-  background: #0b0b0b !important;
-}
-div[data-testid="stMain"]{
-  background: #0b0b0b !important;
-}
-section.main{
-  background: #0b0b0b !important;
-}
-div[data-testid="stVerticalBlock"]{
-  background: #0b0b0b !important;
-}
+        /* Barra superior / decoração */
+        header[data-testid="stHeader"],
+        [data-testid="stDecoration"],
+        [data-testid="stToolbar"] {
+            background: #0b0b0b !important;
+        }
 
-/* Remove espaço/padding que vira “faixa” */
-.block-container {
-  padding-top: 0rem !important;
-  padding-bottom: 0rem !important;
-}
+        /* Remove footer e espaços que viram faixa */
+        footer { visibility: hidden !important; height: 0 !important; }
+        .block-container { padding-top: 0rem !important; padding-bottom: 0rem !important; }
 
-/* Header / toolbar / footer do Streamlit (faixas claras) */
-header[data-testid="stHeader"]{
-  background: #0b0b0b !important;
-}
-div[data-testid="stToolbar"]{
-  background: #0b0b0b !important;
-}
-footer{
-  visibility: hidden !important;
-  height: 0 !important;
-}
+        /* =========================
+           SIDEBAR (cinza quase escuro)
+           ========================= */
+        section[data-testid="stSidebar"] {
+            background: #141414 !important;
+            border-right: 1px solid #222 !important;
+        }
+        section[data-testid="stSidebar"] [data-testid="stMarkdownContainer"],
+        section[data-testid="stSidebar"] label,
+        section[data-testid="stSidebar"] p,
+        section[data-testid="stSidebar"] span,
+        section[data-testid="stSidebar"] div {
+            color: #f2f2f2 !important;
+        }
 
-/* =========================
-   SIDEBAR: CINZA QUASE ESCURO
-   ========================= */
-section[data-testid="stSidebar"]{
-  background: #141414 !important;   /* cinza bem escuro */
-  border-right: 1px solid #222 !important;
-}
-section[data-testid="stSidebar"] *{
-  color: #f2f2f2 !important;
-}
+        /* =========================
+           TEXTO DO MAIN (sem quebrar widgets)
+           ========================= */
+        [data-testid="stMarkdownContainer"], 
+        [data-testid="stCaptionContainer"],
+        .stApp p, .stApp span, .stApp label {
+            color: #f2f2f2;
+        }
 
-/* Chat bubbles e inputs (mantém seu visual) */
-div[data-testid="stChatMessage"] > div{
-  background: #0f0f0f !important;
-  border: 1px solid #1f1f1f !important;
-  border-radius: 14px !important;
-  padding: 14px 14px 10px 14px !important;
-}
-input, textarea{
-  background: #101010 !important;
-  color: #f2f2f2 !important;
-  border: 1px solid #2a2a2a !important;
-}
-div[data-baseweb="select"] > div{
-  background: #101010 !important;
-  border: 1px solid #2a2a2a !important;
-}
-div[data-baseweb="select"] *{
-  color: #f2f2f2 !important;
-}
-button{
-  background: #141414 !important;
-  color: #f2f2f2 !important;
-  border: 1px solid #2a2a2a !important;
-}
-button:hover{
-  border-color: #3a3a3a !important;
-}
-</style>
-""",
-    unsafe_allow_html=True,
-)
+        /* Inputs */
+        input, textarea {
+            background: #101010 !important;
+            color: #f2f2f2 !important;
+            border: 1px solid #2a2a2a !important;
+        }
+
+        /* Selectbox (BaseWeb) */
+        div[data-baseweb="select"] > div {
+            background: #101010 !important;
+            border: 1px solid #2a2a2a !important;
+        }
+        /* não use * global aqui; só o texto do valor/placeholder */
+        div[data-baseweb="select"] span,
+        div[data-baseweb="select"] div {
+            color: #f2f2f2 !important;
+        }
+
+        /* Botões */
+        button {
+            background: #141414 !important;
+            color: #f2f2f2 !important;
+            border: 1px solid #2a2a2a !important;
+        }
+        button:hover { border-color: #3a3a3a !important; }
+
+        /* =========================
+           CHAT: “caixa flutuante”
+           ========================= */
+        div[data-testid="stChatMessage"] > div{
+            background: rgba(15,15,15,0.92) !important;
+            border: 1px solid rgba(255,255,255,0.08) !important;
+            border-radius: 16px !important;
+            padding: 14px 14px 10px 14px !important;
+            box-shadow: 0 10px 26px rgba(0,0,0,0.55) !important;
+            backdrop-filter: blur(6px);
+        }
+        div[data-testid="stChatMessage"] p{
+            margin: 0 0 0.95rem 0 !important;
+            line-height: 1.55 !important;
+            font-size: 1.02rem !important;
+            color: #f2f2f2 !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 
