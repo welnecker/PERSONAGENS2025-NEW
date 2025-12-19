@@ -39,6 +39,48 @@ DEFAULT_VISUAL_LIMIT = 80
 DEFAULT_MODEL = "tngtech/deepseek-r1t2-chimera:free"
 FALLBACK_MODEL = "deepseek/deepseek-chat-v3-0324"
 
+
+import streamlit as st
+
+st.markdown(
+    """
+    <style>
+    /* Remove fundo branco global */
+    html, body, [class*="css"] {
+        background-color: #0e0e0e !important;
+    }
+
+    /* Container principal */
+    .stApp {
+        background-color: #0e0e0e !important;
+    }
+
+    /* Remove padding superior e inferior */
+    .block-container {
+        padding-top: 0rem !important;
+        padding-bottom: 0rem !important;
+    }
+
+    /* Remove header e footer invisíveis */
+    header, footer {
+        visibility: hidden;
+        height: 0px;
+    }
+
+    /* Evita bordas claras em fullscreen */
+    section.main {
+        background-color: #0e0e0e !important;
+    }
+
+    /* Sidebar (se quiser manter coerente) */
+    section[data-testid="stSidebar"] {
+        background-color: #111111 !important;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+
 # ==========================================================
 # TEMA ESCURO (UI)
 # ==========================================================
