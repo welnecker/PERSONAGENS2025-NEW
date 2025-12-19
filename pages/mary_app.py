@@ -45,107 +45,95 @@ FALLBACK_MODEL = "deepseek/deepseek-chat-v3-0324"
 # ==========================================================
 def _apply_dark_ui() -> None:
     st.markdown(
-        """
-        <style>
-        /* ===== Remove tarjas brancas e “barras” do Streamlit ===== */
-        html, body { background: #000 !important; }
-        .stApp { background: #000 !important; }
+    """
+<style>
+/* =========================
+   ZERA TARJAS / FUNDO TOTAL
+   ========================= */
+html, body {
+  background: #0b0b0b !important;
+}
 
-        /* Remove espaço do topo/rodapé (as “tarjas”) */
-        header { visibility: hidden; height: 0px; }
-        footer { visibility: hidden; height: 0px; }
-        [data-testid="stToolbar"] { visibility: hidden; height: 0px; }
-        [data-testid="stDecoration"] { visibility: hidden; height: 0px; }
+/* Container raiz */
+.stApp {
+  background: #0b0b0b !important;
+}
 
-        /* Zera padding superior/inferior do container principal */
-        .block-container {
-            padding-top: 0.35rem !important;
-            padding-bottom: 0.35rem !important;
-        }
+/* NOVO layout (Streamlit recente): containers internos que às vezes ficam brancos */
+div[data-testid="stAppViewContainer"]{
+  background: #0b0b0b !important;
+}
+div[data-testid="stMain"]{
+  background: #0b0b0b !important;
+}
+section.main{
+  background: #0b0b0b !important;
+}
+div[data-testid="stVerticalBlock"]{
+  background: #0b0b0b !important;
+}
 
-        /* Sidebar */
-        section[data-testid="stSidebar"] {
-            background-color: #070707 !important;
-            border-right: 1px solid #1a1a1a !important;
-        }
-        section[data-testid="stSidebar"] * { color: #f2f2f2 !important; }
+/* Remove espaço/padding que vira “faixa” */
+.block-container {
+  padding-top: 0rem !important;
+  padding-bottom: 0rem !important;
+}
 
-        /* Texto global */
-        .stApp, .stApp * { color: #f2f2f2 !important; }
+/* Header / toolbar / footer do Streamlit (faixas claras) */
+header[data-testid="stHeader"]{
+  background: #0b0b0b !important;
+}
+div[data-testid="stToolbar"]{
+  background: #0b0b0b !important;
+}
+footer{
+  visibility: hidden !important;
+  height: 0 !important;
+}
 
-        /* Inputs */
-        input, textarea {
-            background-color: #0b0b0b !important;
-            color: #f2f2f2 !important;
-            border: 1px solid #2a2a2a !important;
-        }
+/* =========================
+   SIDEBAR: CINZA QUASE ESCURO
+   ========================= */
+section[data-testid="stSidebar"]{
+  background: #141414 !important;   /* cinza bem escuro */
+  border-right: 1px solid #222 !important;
+}
+section[data-testid="stSidebar"] *{
+  color: #f2f2f2 !important;
+}
 
-        /* Selectbox */
-        div[data-baseweb="select"] > div {
-            background-color: #0b0b0b !important;
-            border: 1px solid #2a2a2a !important;
-        }
-        div[data-baseweb="select"] * { color: #f2f2f2 !important; }
+/* Chat bubbles e inputs (mantém seu visual) */
+div[data-testid="stChatMessage"] > div{
+  background: #0f0f0f !important;
+  border: 1px solid #1f1f1f !important;
+  border-radius: 14px !important;
+  padding: 14px 14px 10px 14px !important;
+}
+input, textarea{
+  background: #101010 !important;
+  color: #f2f2f2 !important;
+  border: 1px solid #2a2a2a !important;
+}
+div[data-baseweb="select"] > div{
+  background: #101010 !important;
+  border: 1px solid #2a2a2a !important;
+}
+div[data-baseweb="select"] *{
+  color: #f2f2f2 !important;
+}
+button{
+  background: #141414 !important;
+  color: #f2f2f2 !important;
+  border: 1px solid #2a2a2a !important;
+}
+button:hover{
+  border-color: #3a3a3a !important;
+}
+</style>
+""",
+    unsafe_allow_html=True,
+)
 
-        /* Botões */
-        button {
-            background-color: #111 !important;
-            color: #f2f2f2 !important;
-            border: 1px solid #2a2a2a !important;
-        }
-        button:hover { border-color: #3a3a3a !important; }
-
-        /* Expander */
-        div[data-testid="stExpander"] {
-            background-color: #0a0a0a !important;
-            border: 1px solid #1a1a1a !important;
-            border-radius: 12px !important;
-        }
-
-        /* Separadores */
-        hr {
-            border: none !important;
-            border-top: 1px solid #1a1a1a !important;
-        }
-
-        /* Código */
-        pre, code {
-            background-color: #0b0b0b !important;
-            border: 1px solid #1a1a1a !important;
-            color: #f2f2f2 !important;
-        }
-
-        /* ===== Caixa flutuante (chat bubbles) ===== */
-        div[data-testid="stChatMessage"] {
-            margin: 0.75rem 0 !important;
-        }
-
-        div[data-testid="stChatMessage"] > div {
-            background: rgba(18, 18, 18, 0.72) !important;
-            border: 1px solid rgba(255, 255, 255, 0.08) !important;
-            border-radius: 18px !important;
-            padding: 16px 16px 12px 16px !important;
-
-            box-shadow:
-                0 10px 24px rgba(0,0,0,0.55),
-                0 2px 6px rgba(0,0,0,0.35) !important;
-
-            backdrop-filter: blur(10px) !important;
-            -webkit-backdrop-filter: blur(10px) !important;
-        }
-
-        /* Diferenciar user x assistant sem depender de classes instáveis */
-        div[data-testid="stChatMessage"] p {
-            margin: 0 0 0.95rem 0 !important;
-            line-height: 1.6 !important;
-            font-size: 1.02rem !important;
-            color: #f2f2f2 !important;
-        }
-        div[data-testid="stChatMessage"] p:last-child { margin-bottom: 0 !important; }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
 
 
 def _format_paragraphs(text: str) -> str:
