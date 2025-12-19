@@ -6,23 +6,28 @@ from threading import RLock
 import os
 import uuid
 import datetime as _dt
+import atexit
 
 from .config import settings
 
 # ===================== Estado global do backend =====================
 _BACKEND = (getattr(settings, "DB_BACKEND", "") or os.getenv("DB_BACKEND", "")).strip().lower() or "memory"
 
+
 def get_backend() -> str:
     return _BACKEND
+
 
 def set_backend(kind: str) -> None:
     global _BACKEND
     kind = (kind or "").strip().lower()
     _BACKEND = "mongo" if kind == "mongo" else "memory"
 
+
 # ===================== Implementação: Memória =====================
 _STORE: Dict[str, List[Dict[str, Any]]] = {}
 _LOCK = RLock()
+
 
 def _get_nested(d: Dict[str, Any], dotted: str, default=None):
     cur = d
@@ -34,6 +39,7 @@ def _get_nested(d: Dict[str, Any], dotted: str, default=None):
         cur = cur[part]
     return cur
 
+
 def _set_nested(d: Dict[str, Any], dotted: str, value: Any) -> None:
     parts = dotted.split(".")
     cur = d
@@ -42,6 +48,7 @@ def _set_nested(d: Dict[str, Any], dotted: str, value: Any) -> None:
             cur[p] = {}
         cur = cur[p]
     cur[parts[-1]] = value
+
 
 def _unset_nested(d: Dict[str, Any], dotted: str) -> None:
     parts = dotted.split(".")
@@ -52,16 +59,14 @@ def _unset_nested(d: Dict[str, Any], dotted: str) -> None:
         cur = cur[p]
     cur.pop(parts[-1], None)
 
+
 def _match_simple(doc: Dict[str, Any], filt: Optional[Dict[str, Any]]) -> bool:
     if not filt:
         return True
     for k, v in filt.items():
         # suporte mínimo a $in e chaves pontilhadas
         if isinstance(v, dict) and "$in" in v:
-            if "." in k:
-                value = _get_nested(doc, k, None)
-            else:
-                value = doc.get(k)
+            value = _get_nested(doc, k, None) if "." in k else doc.get(k)
             if value not in v["$in"]:
                 return False
         else:
@@ -72,6 +77,7 @@ def _match_simple(doc: Dict[str, Any], filt: Optional[Dict[str, Any]]) -> bool:
                 if doc.get(k) != v:
                     return False
     return True
+
 
 class MemoryCollection:
     def __init__(self, name: str):
@@ -94,15 +100,18 @@ class MemoryCollection:
     ) -> Iterable[Dict[str, Any]]:
         with _LOCK:
             rows = [d.copy() for d in _STORE.get(self.name, []) if _match_simple(d, filt)]
+
         if sort:
             # aplica múltiplas chaves, da última para a primeira
             for key, direction in reversed(sort):
                 rows.sort(
                     key=lambda x: _get_nested(x, key, None),
-                    reverse=(direction or 1) < 0
+                    reverse=(direction or 1) < 0,
                 )
+
         if limit:
             rows = rows[:limit]
+
         return rows
 
     def find_one(
@@ -164,10 +173,6 @@ class MemoryCollection:
             return before - len(rows)
 
     def delete_one(self, filt: Dict[str, Any]) -> Dict[str, Any]:
-        r = self._col.delete_one(filt or {})
-        return {"deleted_count": int(getattr(r, "deleted_count", 0) or 0)}
-    
-    def delete_one(self, filt: Dict[str, Any]) -> Dict[str, Any]:
         """
         Remove o primeiro doc que casar com o filtro.
         Retorna {"deleted_count": 0|1} para compatibilidade com pymongo.
@@ -179,12 +184,13 @@ class MemoryCollection:
                     rows.pop(i)
                     return {"deleted_count": 1}
             return {"deleted_count": 0}
-    
+
 
 # ===================== Implementação: Mongo (opcional) =====================
 _MONGO_OK = False
 _mongo_client = None
 _mongo_db = None
+
 
 def _close_mongo():
     global _mongo_client
@@ -195,13 +201,13 @@ def _close_mongo():
             pass
         _mongo_client = None
 
-import atexit
+
 atexit.register(_close_mongo)
+
 
 def _ensure_mongo():
     global _MONGO_OK, _mongo_client, _mongo_db
-    # Double-check locking pattern could be better, but we are under GIL for global var assign effectively.
-    # To be safer with threads, we use the existing _LOCK or a new one.
+
     if _mongo_db is not None:
         return
 
@@ -213,26 +219,26 @@ def _ensure_mongo():
     with _LOCK:
         if _mongo_db is not None:
             return
-        
+
         try:
             from pymongo import MongoClient
-            # Melhora robustez e eficiência de conexões
+
             _mongo_client = MongoClient(
                 uri,
                 maxPoolSize=50,
                 minPoolSize=5,
-                serverSelectionTimeoutMS=5000, # Fail fast se DB cair
+                serverSelectionTimeoutMS=5000,  # Fail fast se DB cair
                 connectTimeoutMS=5000,
                 socketTimeoutMS=5000,
             )
             dbname = (getattr(settings, "MONGO_DB", "") or "").strip() or settings.APP_NAME
             _mongo_db = _mongo_client.get_database(dbname)
-
             _MONGO_OK = True
         except Exception:
             _MONGO_OK = False
             _mongo_client = None
             _mongo_db = None
+
 
 class MongoCollection:
     def __init__(self, name: str):
@@ -275,11 +281,14 @@ class MongoCollection:
         self._col.update_one(filt, update, upsert=upsert)
 
     def delete_many(self, filt: Dict[str, Any]) -> int:
-        return self._col.delete_many(filt or {}).deleted_count
+        return int(self._col.delete_many(filt or {}).deleted_count)
 
-    def _init_backend_from_settings() -> None:
+
+# ===================== Init backend =====================
+def _init_backend_from_settings() -> None:
     global _BACKEND
     desired = (getattr(settings, "DB_BACKEND", "") or os.getenv("DB_BACKEND", "")).strip().lower()
+
     if desired == "mongo":
         _ensure_mongo()
         _BACKEND = "mongo" if _MONGO_OK else "memory"
@@ -309,14 +318,12 @@ def get_col(name: str):
     return MemoryCollection(name)
 
 
-
 def db_status() -> Tuple[str, str]:
     if get_backend() == "mongo":
         _ensure_mongo()
         dbname = (getattr(settings, "MONGO_DB", "") or "").strip() or settings.APP_NAME
         return ("mongo", f"OK (db={dbname})" if _MONGO_OK else "indisponível")
     return ("memory", "memória local (RAM)")
-
 
 
 def ping_db() -> Tuple[str, bool, str]:
