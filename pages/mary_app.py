@@ -1,16 +1,17 @@
-# mary_app.py (v3.1 - FIX: apagar último turno + limpar cache do service + debounce + erro visível)
 from __future__ import annotations
 
 import time
-import streamlit as st
-import importlib
-import inspect
 import re
 import traceback
+import importlib
+import inspect
+
+import streamlit as st
 
 import characters.mary.persona as mary_persona
-from characters.mary.service import MaryService, _current_user_key  # _persist_scene_basics não é usado aqui
+from characters.mary.service import MaryService, _current_user_key
 from characters.mary.persona import get_persona
+
 from core.service_router import list_models
 from core.database import db_status
 from core.repositories import (
@@ -18,7 +19,6 @@ from core.repositories import (
     get_history_docs,
     get_history_docs_multi,
     get_facts,
-    set_fact,
     delete_fact,
     delete_last_interaction,
     delete_user_history,
@@ -40,79 +40,108 @@ DEFAULT_MODEL = "tngtech/deepseek-r1t2-chimera:free"
 FALLBACK_MODEL = "deepseek/deepseek-chat-v3-0324"
 
 
-import streamlit as st
-
-st.markdown(
-    """
-    <style>
-    /* Remove fundo branco global */
-    html, body, [class*="css"] {
-        background-color: #0e0e0e !important;
-    }
-
-    /* Container principal */
-    .stApp {
-        background-color: #0e0e0e !important;
-    }
-
-    /* Remove padding superior e inferior */
-    .block-container {
-        padding-top: 0rem !important;
-        padding-bottom: 0rem !important;
-    }
-
-    /* Remove header e footer invisíveis */
-    header, footer {
-        visibility: hidden;
-        height: 0px;
-    }
-
-    /* Evita bordas claras em fullscreen */
-    section.main {
-        background-color: #0e0e0e !important;
-    }
-
-    /* Sidebar (se quiser manter coerente) */
-    section[data-testid="stSidebar"] {
-        background-color: #111111 !important;
-    }
-    </style>
-    """,
-    unsafe_allow_html=True
-)
-
 # ==========================================================
-# TEMA ESCURO (UI)
+# UI / CSS (remove tarjas + dark + floating cards)
 # ==========================================================
 def _apply_dark_ui() -> None:
     st.markdown(
         """
         <style>
-        .stApp { background-color: #000 !important; }
-        .stApp, .stApp * { color: #f2f2f2 !important; }
-        section[data-testid="stSidebar"] { background-color: #070707 !important; border-right: 1px solid #1a1a1a !important; }
+        /* ===== Remove tarjas brancas e “barras” do Streamlit ===== */
+        html, body { background: #000 !important; }
+        .stApp { background: #000 !important; }
+
+        /* Remove espaço do topo/rodapé (as “tarjas”) */
+        header { visibility: hidden; height: 0px; }
+        footer { visibility: hidden; height: 0px; }
+        [data-testid="stToolbar"] { visibility: hidden; height: 0px; }
+        [data-testid="stDecoration"] { visibility: hidden; height: 0px; }
+
+        /* Zera padding superior/inferior do container principal */
+        .block-container {
+            padding-top: 0.35rem !important;
+            padding-bottom: 0.35rem !important;
+        }
+
+        /* Sidebar */
+        section[data-testid="stSidebar"] {
+            background-color: #070707 !important;
+            border-right: 1px solid #1a1a1a !important;
+        }
         section[data-testid="stSidebar"] * { color: #f2f2f2 !important; }
-        label, label * { color: #f2f2f2 !important; }
-        input, textarea { background-color: #0b0b0b !important; color: #f2f2f2 !important; border: 1px solid #2a2a2a !important; }
-        div[data-baseweb="select"] > div { background-color: #0b0b0b !important; border: 1px solid #2a2a2a !important; }
+
+        /* Texto global */
+        .stApp, .stApp * { color: #f2f2f2 !important; }
+
+        /* Inputs */
+        input, textarea {
+            background-color: #0b0b0b !important;
+            color: #f2f2f2 !important;
+            border: 1px solid #2a2a2a !important;
+        }
+
+        /* Selectbox */
+        div[data-baseweb="select"] > div {
+            background-color: #0b0b0b !important;
+            border: 1px solid #2a2a2a !important;
+        }
         div[data-baseweb="select"] * { color: #f2f2f2 !important; }
-        button { background-color: #111 !important; color: #f2f2f2 !important; border: 1px solid #2a2a2a !important; }
+
+        /* Botões */
+        button {
+            background-color: #111 !important;
+            color: #f2f2f2 !important;
+            border: 1px solid #2a2a2a !important;
+        }
         button:hover { border-color: #3a3a3a !important; }
-        div[data-testid="stExpander"] { background-color: #0a0a0a !important; border: 1px solid #1a1a1a !important; border-radius: 12px !important; }
-        hr { border: none !important; border-top: 1px solid #1a1a1a !important; }
-        pre, code { background-color: #0b0b0b !important; border: 1px solid #1a1a1a !important; color: #f2f2f2 !important; }
-        div[data-testid="stChatMessage"] > div {
+
+        /* Expander */
+        div[data-testid="stExpander"] {
+            background-color: #0a0a0a !important;
+            border: 1px solid #1a1a1a !important;
+            border-radius: 12px !important;
+        }
+
+        /* Separadores */
+        hr {
+            border: none !important;
+            border-top: 1px solid #1a1a1a !important;
+        }
+
+        /* Código */
+        pre, code {
             background-color: #0b0b0b !important;
             border: 1px solid #1a1a1a !important;
-            border-radius: 14px !important;
-            padding: 14px 14px 10px 14px !important;
+            color: #f2f2f2 !important;
         }
+
+        /* ===== Caixa flutuante (chat bubbles) ===== */
+        div[data-testid="stChatMessage"] {
+            margin: 0.75rem 0 !important;
+        }
+
+        div[data-testid="stChatMessage"] > div {
+            background: rgba(18, 18, 18, 0.72) !important;
+            border: 1px solid rgba(255, 255, 255, 0.08) !important;
+            border-radius: 18px !important;
+            padding: 16px 16px 12px 16px !important;
+
+            box-shadow:
+                0 10px 24px rgba(0,0,0,0.55),
+                0 2px 6px rgba(0,0,0,0.35) !important;
+
+            backdrop-filter: blur(10px) !important;
+            -webkit-backdrop-filter: blur(10px) !important;
+        }
+
+        /* Diferenciar user x assistant sem depender de classes instáveis */
         div[data-testid="stChatMessage"] p {
             margin: 0 0 0.95rem 0 !important;
-            line-height: 1.55 !important;
+            line-height: 1.6 !important;
             font-size: 1.02rem !important;
             color: #f2f2f2 !important;
         }
+        div[data-testid="stChatMessage"] p:last-child { margin-bottom: 0 !important; }
         </style>
         """,
         unsafe_allow_html=True,
@@ -207,29 +236,31 @@ def _choose_default_model(available: list[str]) -> str:
     if available and DEFAULT_MODEL in available:
         return DEFAULT_MODEL
     if available:
+        # não força excluir grok; apenas evita como default se houver outros
         non_grok = [m for m in available if "grok" not in (m or "").lower()]
-        return (non_grok[0] if non_grok else available[0])
+        return non_grok[0] if non_grok else available[0]
     return FALLBACK_MODEL
 
 
 def _garantir_estado_inicial() -> None:
     if "user_id" not in st.session_state or not st.session_state["user_id"]:
         st.session_state["user_id"] = "Janio Donisete"
+
     if "chat_history" not in st.session_state:
         st.session_state["chat_history"] = []
 
+    # modelos disponíveis
     try:
         modelos = list_models() or []
     except Exception:
         modelos = []
 
+    # garante model persistente: só troca se vazio ou inválido
     if "model" not in st.session_state or not st.session_state["model"]:
         st.session_state["model"] = _choose_default_model(modelos)
     else:
-        # se o modelo escolhido não existe mais na lista, volta pro default
         if modelos and st.session_state["model"] not in modelos:
             st.session_state["model"] = _choose_default_model(modelos)
-
 
     if "mary_nsfw_on" not in st.session_state:
         st.session_state["mary_nsfw_on"] = True
@@ -250,7 +281,7 @@ def _garantir_estado_inicial() -> None:
 
 
 def _clear_service_caches_for_keys(keys: list[str]) -> None:
-    # ✅ IMPORTANTÍSSIMO: o MaryService cacheia facts/history com chaves "facts::" e "history::"
+    # MaryService cacheia facts/history com chaves "facts::" e "history::"
     for k in keys:
         for ck in (f"facts::{k}", f"history::{k}"):
             if ck in st.session_state:
@@ -354,7 +385,8 @@ def _apagar_eventos_mary_fact(usuario_key: str) -> int:
         facts = {}
 
     keys = [
-        k for k in facts.keys()
+        k
+        for k in facts.keys()
         if isinstance(k, str) and (k.startswith("mary.evento.") or k.startswith("mary.eventos."))
     ]
     removed = 0
@@ -370,7 +402,7 @@ def _apagar_eventos_mary_fact(usuario_key: str) -> int:
 def _delete_last_turn(keys: list[str]) -> bool:
     """
     Delete do último registro no backend, tentando novo + legado.
-    Depois limpa caches do Service.
+    Depois limpa caches do Service e invalida cache visual.
     """
     ok = False
     for k in keys:
@@ -394,13 +426,14 @@ def main() -> None:
     _garantir_estado_inicial()
     svc = _get_service()
 
-    st.caption("🧩 mary_app.py v3.1 (fix: delete turno + cache service + debounce + erro visível)")
+    st.caption("🧩 mary_app.py v3.1 (FIX: apagar turno + limpar cache do service + debounce + erro visível)")
 
     backend, detail = db_status()
     st.caption(f"🗄️ Backend atual: **{backend}** ({detail})")
 
     st.title("Mary – Esposa Cúmplice 💍💍")
 
+    # ===== BACKEND =====
     keys = _keys_para_mary()
     with st.expander("🧨 BACKEND — apagar histórico de verdade + diagnóstico", expanded=False):
         st.write("Chaves usadas (novo + legado):", keys)
@@ -448,15 +481,15 @@ def main() -> None:
         if not all_models:
             all_models = [FALLBACK_MODEL]
 
+        # se o estado atual não existe mais, volta pro default
         if st.session_state.get("model") not in all_models:
             st.session_state["model"] = _choose_default_model(all_models)
 
-        default_idx = all_models.index(DEFAULT_MODEL) if DEFAULT_MODEL in all_models else 0
         current = st.session_state.get("model")
-        if current in all_models:
-            default_idx = all_models.index(current)
+        idx = all_models.index(current) if current in all_models else 0
 
-        st.selectbox("🧠 Modelo", all_models, index=default_idx, key="model")
+        # ✅ selectbox fixa qualquer modelo escolhido (inclusive grok)
+        st.selectbox("🧠 Modelo", all_models, index=idx, key="model")
 
         st.markdown("---")
         st.checkbox("Modo adulto liberado (NSFW)", key="mary_nsfw_on")
@@ -522,7 +555,7 @@ def main() -> None:
     # ===== INPUT =====
     prompt = st.chat_input("Fala algo pra Mary...")
     if prompt:
-        # ✅ debounce: evita spam acidental (e evita o “3x manual” virar caos)
+        # ✅ debounce anti-duplicação
         now = time.time()
         last_ts = float(st.session_state.get("last_submit_ts", 0.0))
         last_txt = str(st.session_state.get("last_submit_text", ""))
