@@ -311,11 +311,10 @@ def get_col(name: str):
 def db_status() -> Tuple[str, str]:
     if get_backend() == "mongo":
         _ensure_mongo()
-        if _MONGO_OK:
-            return ("mongo", f"db={settings.APP_NAME}")
-        else:
-            return ("memory", "mongo configurado mas indisponível")
+        dbname = (getattr(settings, "MONGO_DB", "") or "").strip() or settings.APP_NAME
+        return ("mongo", f"OK (db={dbname})" if _MONGO_OK else "indisponível")
     return ("memory", "memória local (RAM)")
+
 
 
 def ping_db() -> Tuple[str, bool, str]:
