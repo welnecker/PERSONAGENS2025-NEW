@@ -302,10 +302,12 @@ _init_backend_from_settings()
 def get_col(name: str):
     if get_backend() == "mongo":
         _ensure_mongo()
-        if not _MONGO_OK:
-            raise RuntimeError("Mongo configurado mas indisponível.")
-        return MongoCollection(name)
+        if _MONGO_OK:
+            return MongoCollection(name)
+        # fallback
+        return MemoryCollection(name)
     return MemoryCollection(name)
+
 
 
 def db_status() -> Tuple[str, str]:
