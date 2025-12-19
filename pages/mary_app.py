@@ -538,16 +538,19 @@ def main() -> None:
             st.rerun()
 
     # ===== BOOT =====
+    # ===== BOOT =====
     if not st.session_state["chat_history"]:
+        has_any = False  # ✅ sempre definido
+    
         backend_hist = _carregar_chat_visual_do_backend(force=False)
-
+    
         if backend_hist:
             st.session_state["chat_history"] = backend_hist
             st.session_state["mary_intro_done"] = True
+            has_any = True  # ✅ já sabemos que existe
         else:
             # Confirma de verdade se NÃO existe histórico em nenhuma key
             keys = _keys_para_mary()
-            has_any = False
             for k in keys:
                 try:
                     if (get_history_docs(k, limit=1) or []):
@@ -559,9 +562,11 @@ def main() -> None:
                     st.write("Key:", k)
                     st.code(traceback.format_exc())
                     st.stop()
-
+    
         if has_any:
-            st.warning("⚠️ Existe histórico no BD, mas o merge retornou vazio. Verifique get_history_docs_multi / filtros.")
+            # se backend_hist veio vazio MAS existe histórico → alerta de merge/filtro
+            if not backend_hist:
+                st.warning("⚠️ Existe histórico no BD, mas o merge retornou vazio. Verifique get_history_docs_multi / filtros.")
         else:
             if not st.session_state.get("mary_intro_done", False):
                 _colar_fala_inicial_na_tela()
